@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -26,39 +27,62 @@ var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0
 
 const attachmentsListPath = "/wiki/api/v2/pages/123456/attachments"
 
-// attachment is one entry of the listing a test serves.
+// attachment is one entry of the listing a test serves. id defaults to
+// att<n>, n being its 1-based position, and version to 1; a negative version
+// leaves the field out of the listing.
 type attachment struct {
+	id        string
 	title     string
 	mediaType string
 	size      int
+	version   int
 }
 
-// attachmentsAPI answers the listing with the given attachments and every
-// download with pngBytes, counting the downloads.
+// attachmentBytes is what a download pinned to a version serves: distinct per
+// attachment and version, so a test can tell which one was written where.
+func attachmentBytes(id, version string) []byte {
+	return append(slices.Clone(pngBytes), []byte(id+"@v"+version)...)
+}
+
+// attachmentsAPI answers page 123456's listing; see pageAttachmentsAPI.
+func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.HandlerFunc) {
+	t.Helper()
+	return pageAttachmentsAPI(t, "123456", attachments...)
+}
+
+// pageAttachmentsAPI answers one page's listing with the given attachments and
+// counts the downloads. A download that names a version is answered with
+// attachmentBytes, and one that does not with pngBytes: the download commands
+// fetch the listing's downloadLink, and `confluence read --attachments` pins
+// the version it listed.
 //
 // Both paths are matched exactly, so a request the command should not be
 // making at all fails the test rather than being quietly answered. The
-// download path is the one the client builds from `downloadLink`, which is why
-// the listing hands out links in the API's own shape.
-func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.HandlerFunc) {
+// listing hands out download links in the API's own shape.
+func pageAttachmentsAPI(t *testing.T, pageID string, attachments ...attachment) (*int, http.HandlerFunc) {
 	t.Helper()
 
-	const downloadBase = "/wiki/rest/api/content/123456/child/attachment/"
+	listPath := "/wiki/api/v2/pages/" + pageID + "/attachments"
+	downloadBase := "/wiki/rest/api/content/" + pageID + "/child/attachment/"
 
 	downloads := 0
 	return &downloads, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == attachmentsListPath:
+		case r.URL.Path == listPath:
 			results := make([]map[string]any, 0, len(attachments))
 			for i, a := range attachments {
-				id := fmt.Sprintf("att%d", i+1)
-				results = append(results, map[string]any{
+				id := cmp.Or(a.id, fmt.Sprintf("att%d", i+1))
+				entry := map[string]any{
 					"id":           id,
 					"title":        a.title,
 					"mediaType":    a.mediaType,
 					"fileSize":     a.size,
-					"downloadLink": "/rest/api/content/123456/child/attachment/" + id + "/download",
-				})
+					"downloadLink": "/rest/api/content/" + pageID + "/child/attachment/" + id + "/download",
+				}
+				if a.version >= 0 {
+					entry["version"] = map[string]any{"number": max(a.version, 1)}
+				}
+				results = append(results, entry)
 			}
 			payload, err := json.Marshal(map[string]any{"results": results, "_links": map[string]any{}})
 			if err != nil {
@@ -68,6 +92,11 @@ func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.Handler
 			_, _ = w.Write(payload)
 		case strings.HasPrefix(r.URL.Path, downloadBase) && strings.HasSuffix(r.URL.Path, "/download"):
 			downloads++
+			if version := r.URL.Query().Get("version"); version != "" {
+				id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, downloadBase), "/download")
+				_, _ = w.Write(attachmentBytes(id, version))
+				return
+			}
 			_, _ = w.Write(pngBytes)
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)

@@ -513,6 +513,18 @@ func confluenceAttachmentFile(client *confluence.Client, a confluence.Attachment
 	}
 }
 
+// confluencePinnedAttachmentFile adapts a page attachment to the download
+// paths, fetching the version the listing reported rather than whatever is
+// latest when the request arrives.
+func confluencePinnedAttachmentFile(client *confluence.Client, pageID string, a confluence.Attachment) attachmentFile {
+	return attachmentFile{
+		filename: a.Title,
+		fetch: func(ctx context.Context, w io.Writer) (int64, error) {
+			return client.DownloadAttachmentVersion(ctx, pageID, a.ID, a.Version.Number, w)
+		},
+	}
+}
+
 // plannedDownload is one matched attachment together with the file it will be
 // written to, so the transfer loop never has to pair the two by index.
 type plannedDownload struct {

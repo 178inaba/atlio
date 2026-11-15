@@ -566,15 +566,15 @@ func TestCreateFooterCommentPostsAStorageBodyUnescaped(t *testing.T) {
 	}
 }
 
-func TestPageAttachmentsListsTitleMediaTypeSizeAndDownloadLink(t *testing.T) {
+func TestPageAttachmentsListsIDVersionTitleMediaTypeSizeAndDownloadLink(t *testing.T) {
 	var gotPath string
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		_, _ = fmt.Fprint(w, `{"results":[
 			{"id":"att1","title":"screenshot.png","mediaType":"image/png","fileSize":46982,
-			 "downloadLink":"/rest/api/content/10/child/attachment/att1/download"},
+			 "version":{"number":3},"downloadLink":"/rest/api/content/10/child/attachment/att1/download"},
 			{"id":"att2","title":"spec.pdf","mediaType":"application/pdf","fileSize":3841203,
-			 "downloadLink":"/rest/api/content/10/child/attachment/att2/download"}
+			 "version":{"number":1},"downloadLink":"/rest/api/content/10/child/attachment/att2/download"}
 		],"_links":{}}`)
 	})
 
@@ -591,12 +591,14 @@ func TestPageAttachmentsListsTitleMediaTypeSizeAndDownloadLink(t *testing.T) {
 
 	want := []Attachment{
 		{
-			Title: "screenshot.png", MediaType: "image/png", FileSize: 46982,
+			ID: "att1", Title: "screenshot.png", MediaType: "image/png", FileSize: 46982,
 			DownloadLink: "/rest/api/content/10/child/attachment/att1/download",
+			Version:      AttachmentVersion{Number: 3},
 		},
 		{
-			Title: "spec.pdf", MediaType: "application/pdf", FileSize: 3841203,
+			ID: "att2", Title: "spec.pdf", MediaType: "application/pdf", FileSize: 3841203,
 			DownloadLink: "/rest/api/content/10/child/attachment/att2/download",
+			Version:      AttachmentVersion{Number: 1},
 		},
 	}
 	if !slices.Equal(attachments, want) {
@@ -804,6 +806,33 @@ func TestDownloadAttachmentStreamsTheBodyUnchanged(t *testing.T) {
 	}
 	if n != int64(len(pngBytes)) {
 		t.Errorf("n = %d, want %d", n, len(pngBytes))
+	}
+}
+
+// The version goes in the query of the documented download endpoint, which
+// otherwise serves whatever version is latest when the request arrives.
+func TestDownloadAttachmentVersionPinsTheVersion(t *testing.T) {
+	var gotPath, gotVersion string
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		gotVersion = r.URL.Query().Get("version")
+		_, _ = w.Write(pngBytes)
+	})
+
+	var buf bytes.Buffer
+	n, err := client.DownloadAttachmentVersion(t.Context(), "10", "att 1", 2, &buf)
+	if err != nil {
+		t.Fatalf("DownloadAttachmentVersion() error = %v", err)
+	}
+
+	if want := "/wiki/rest/api/content/10/child/attachment/att%201/download"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+	if gotVersion != "2" {
+		t.Errorf("version = %q, want 2", gotVersion)
+	}
+	if !bytes.Equal(buf.Bytes(), pngBytes) || n != int64(len(pngBytes)) {
+		t.Errorf("body = %v (%d bytes), want the served bytes verbatim", buf.Bytes(), n)
 	}
 }
 

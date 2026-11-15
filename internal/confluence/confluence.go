@@ -449,17 +449,24 @@ func (c *Client) CreateFooterComment(ctx context.Context, pageID, body string) (
 // is relative to the client's base URL (<site>/wiki), in the form
 // /rest/api/content/{pageID}/child/attachment/{attachmentID}/download.
 //
-// The API's own attachment id is deliberately not modelled: DownloadLink
-// already carries it, and it is nothing a caller could use — downloads select
-// by filename, and Confluence keeps same-named attachments as versions of one
-// attachment rather than as separate ones, so no two listing entries share a
-// name for an id to tell apart. Names are matched ignoring case: an upload of
-// A.png to a page holding a.png becomes a new version of a.png.
+// ID and Version together name the bytes this entry describes, which the
+// filename does not: the same name on another page is another attachment, and
+// an upload under a name the page already holds — matched ignoring case, so
+// A.png onto a page holding a.png — becomes a new version of that attachment.
+// DownloadAttachmentVersion fetches exactly these bytes.
 type Attachment struct {
-	Title        string `json:"title"`
-	MediaType    string `json:"mediaType"`
-	FileSize     int64  `json:"fileSize"`
-	DownloadLink string `json:"downloadLink"`
+	ID           string            `json:"id"`
+	Title        string            `json:"title"`
+	MediaType    string            `json:"mediaType"`
+	FileSize     int64             `json:"fileSize"`
+	DownloadLink string            `json:"downloadLink"`
+	Version      AttachmentVersion `json:"version"`
+}
+
+// AttachmentVersion is the version of an attachment a listing reported.
+// Number is 0 when the listing left it out.
+type AttachmentVersion struct {
+	Number int `json:"number"`
 }
 
 // PageAttachments lists the files attached to a page, up to limit; a limit of
@@ -491,6 +498,20 @@ func (c *Client) DownloadAttachment(ctx context.Context, downloadLink string, w 
 		return 0, err
 	}
 	return c.api.Download(ctx, endpoint, downloadLink, w)
+}
+
+// DownloadAttachmentVersion streams one version of a page's attachment to w
+// and returns how many bytes it wrote.
+//
+// The request names the version in the query of the documented v1 download
+// endpoint, which serves the latest version without one. DownloadLink is not
+// used here because the API documents nothing about its form, so nothing says
+// it names a version; this is what makes the bytes the listed version's even
+// when an upload lands between the listing and the download.
+func (c *Client) DownloadAttachmentVersion(ctx context.Context, pageID, attachmentID string, version int, w io.Writer) (int64, error) {
+	path := "/rest/api/content/" + url.PathEscape(pageID) + "/child/attachment/" + url.PathEscape(attachmentID) +
+		"/download?version=" + strconv.Itoa(version)
+	return c.api.Download(ctx, c.api.BaseURL()+path, path, w)
 }
 
 // UploadFile is one file to attach: Name is the attachment's filename, and

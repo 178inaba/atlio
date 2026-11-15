@@ -260,18 +260,25 @@ For the images the body actually uses, `--attachments` does that as part of the 
 atlio confluence read 123456 --markdown --attachments ./assets
 ```
 
-The referenced attachments land in `./assets`, and the Markdown links to them
-(`![main.png](./assets/main.png)`) so an image can be opened straight from the body. It requires
-`--markdown` — a storage body is written back verbatim, so there would be nothing to link the files
-from — and it fetches only what the body references; the page's other attachments are the
-`confluence attachments` commands' job. The link is the directory as you passed it joined with the
-filename, so it resolves from the working directory, the same as `-o`.
+Each referenced attachment lands in `./assets/<attachment ID>/v<version>/<filename>`, the version
+the page lists, and the Markdown links to it (`![main.png](./assets/att123/v2/main.png)`) so an
+image can be opened straight from the body. It requires `--markdown` — a storage body is written back
+verbatim, so there would be nothing to link the files from — and it fetches only what the body
+references; the page's other attachments are the `confluence attachments` commands' job. The link is
+the directory as you passed it joined with that path, so it resolves from the working directory, the
+same as `-o`.
+
+The path belongs to one version of one attachment: another page's `main.png` has another ID, and a
+new version after `confluence attachments upload --replace` gets its own `v<version>` directory, so
+several pages can share one `--attachments` directory and no image is linked to another file's
+bytes. A file already at that path is therefore the same attachment version, and is kept — not
+replaced, and not downloaded again — so reading the same page twice is cheap and never overwrites
+anything. Older versions' files stay where they are; clearing the directory is up to you. Files are
+written as `confluence attachments download` writes its own (below), so an interrupted read leaves
+at most a hidden `.atlio-*.tmp` file rather than a partial file at that path.
 
 An attachment that cannot be fetched leaves the image rendered as its filename rather than failing
-the read, and is counted in `Unchecked:` above. A file already sitting at the destination is kept —
-not replaced, and not downloaded again — so reading the same page twice is cheap and never
-overwrites anything. (`confluence attachments download` refuses the whole run on such a collision; a
-read cannot, or re-reading a page would stop working the second time.)
+the read, and is counted in `Unchecked:` above.
 
 For an attachment the body does not reference — a PDF linked from the text, a spreadsheet — use the
 `confluence attachments` commands directly. `confluence attachments list` shows every attachment's

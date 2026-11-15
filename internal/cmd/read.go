@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/178inaba/atlio/internal/confluence"
@@ -39,10 +41,15 @@ only going to be read, and the storage default when it might be edited.
 
 ` + "`--attachments <dir>`" + ` additionally downloads the attachments the body's images
 point at into that directory and links to them, so the page's images can be
-read as files. It requires ` + "`--markdown`" + `, only fetches the attachments the body
-actually references, and keeps a file already sitting at the destination
-rather than replacing it. An attachment it cannot fetch leaves the image
-rendered as its filename and is counted in Unchecked.`,
+read as files. It requires ` + "`--markdown`" + ` and only fetches the attachments the body
+actually references. Each is written to <dir>/<attachment ID>/v<version>/<filename>,
+the version the page lists, so another page's attachment of the same name or
+another version never shares its path; a file already at that path is that
+same attachment version, and is kept and linked without being fetched again.
+An interrupted download leaves at most a hidden .atlio-*.tmp file, not a
+partial file at that path, except on a filesystem that cannot rename without
+replacing. An attachment it cannot fetch leaves the image rendered as its
+filename and is counted in Unchecked.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReadPage(cmd, args, g, outPath, markdown, attachmentsDir, outFormat)
@@ -308,6 +315,14 @@ func pagesBySpace(refs []format.PageRef, pageSpaceKey string) (groups map[string
 // sourced from into dir, and returns the destination each one is linked from,
 // keyed by filename, plus how many references it could not answer.
 //
+// Each attachment is written to dir/<attachment ID>/v<version>/<filename>, a
+// path only that version of that attachment can have: another page's
+// attachment of the same name has another ID, a new version gets its own
+// directory, and the directories are named by atlio rather than by the server's
+// filenames, so no two names that the filesystem folds together share one. A
+// file already at that path is therefore the bytes it names, which is what
+// lets a read keep it.
+//
 // Only the referenced filenames are fetched. The page's other attachments are
 // `atlio confluence attachments download`'s job, and pulling a 4 MB PDF because
 // it happens to be attached is exactly the cost its --pattern exists to make
@@ -346,7 +361,7 @@ func downloadReferencedAttachments(
 	}
 
 	unchecked := 0
-	var planned []plannedDownload
+	var paths map[string]string
 	for _, filename := range filenames {
 		a, ok := byFilename[filename]
 		if !ok {
@@ -358,49 +373,60 @@ func downloadReferencedAttachments(
 			continue
 		}
 
-		dest, err := attachmentDest(a.Title, dir)
-		if err != nil {
+		elems, ok := attachmentPathElems(a)
+		if !ok {
 			unchecked++
 			continue
 		}
-		planned = append(planned, plannedDownload{file: confluenceAttachmentFile(client, a), dest: dest})
-	}
-	if len(planned) == 0 {
-		return nil, unchecked
-	}
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, unchecked + len(planned)
-	}
-
-	paths := make(map[string]string, len(planned))
-	for _, p := range planned {
+		p := plannedDownload{
+			file: confluencePinnedAttachmentFile(client, pageID, a),
+			dest: filepath.Join(append([]string{dir}, elems...)...),
+		}
 		if !fetchAttachment(ctx, p) {
 			unchecked++
 			continue
 		}
-		paths[p.file.filename] = attachmentLink(dir, p.file.filename)
+		if paths == nil {
+			paths = make(map[string]string, len(filenames))
+		}
+		paths[filename] = attachmentLink(dir, elems)
 	}
 	return paths, unchecked
+}
+
+// attachmentPathElems returns the path elements an attachment is written under
+// below the --attachments directory — its ID, v<version> and its filename — or
+// false if it has none. The ID and the filename come from the server and go
+// into a path, so both pass isPlainFilename; an entry missing its ID or its
+// version has no path that names its bytes.
+func attachmentPathElems(a confluence.Attachment) ([]string, bool) {
+	if !isPlainFilename(a.ID) || !isPlainFilename(a.Title) || a.Version.Number < 1 {
+		return nil, false
+	}
+	return []string{a.ID, "v" + strconv.Itoa(a.Version.Number), a.Title}, true
 }
 
 // fetchAttachment writes one attachment to its destination unless a file is
 // already there, reporting whether the destination now holds a file to link.
 //
-// An existing file is kept rather than replaced or re-downloaded. That is a
-// deliberate departure from `confluence attachments download`, which refuses
-// its whole run on a collision: a read must not fail over the state of a
-// directory, or reading the same page twice would stop working the second time.
+// An existing file is kept rather than replaced or re-downloaded: its path
+// names the attachment version it holds, so it is already the answer. A read
+// therefore never fails over the state of the directory either, where
+// `confluence attachments download` refuses its whole run on a collision.
 //
 // The destination is checked before the transfer, with Lstat as planDownloads
 // checks it, so a file already there costs no request — a dangling symlink
 // included, which the move would refuse as an entry too. A file that appears
-// after the check is still kept: the move refuses to replace it, and its
-// fs.ErrExist is taken the same way.
+// after the check is still kept: the move refuses to replace it, and the
+// fs.ErrExist it reports means the same version is there. The directory is
+// created only for a transfer, so a read that fetches nothing creates nothing.
 func fetchAttachment(ctx context.Context, p plannedDownload) bool {
 	if _, err := os.Lstat(p.dest); err == nil {
 		return true
 	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(p.dest), 0o755); err != nil {
 		return false
 	}
 	if _, err := downloadToFile(ctx, p.file, p.dest); err != nil {
@@ -412,10 +438,10 @@ func fetchAttachment(ctx context.Context, p plannedDownload) bool {
 // attachmentLink builds the destination an image links its downloaded file
 // from. The directory goes in exactly as it was given, so the link resolves
 // from the working directory — the same place --attachments and -o are
-// themselves interpreted from — and it is joined with a forward slash,
+// themselves interpreted from — and it is joined with forward slashes,
 // because what is being built is a link rather than a filesystem path.
-func attachmentLink(dir, filename string) string {
-	return strings.TrimRight(dir, "/") + "/" + filename
+func attachmentLink(dir string, elems []string) string {
+	return strings.TrimRight(dir, "/") + "/" + strings.Join(elems, "/")
 }
 
 // writeFreshBody writes a body that a read has just fetched, as opposed to

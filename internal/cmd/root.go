@@ -21,17 +21,8 @@ const defaultTimeout = 90 * time.Second
 // stderr. Sibling repos use it for the same purpose.
 const timeoutExitCode = 124
 
-// version is the release version, set at link time by GoReleaser's
-// -X github.com/178inaba/atlio/internal/cmd.version={{.Version}} and empty in
-// a binary built any other way. It is package-level state because -X can reach
-// nothing else — the code convention that rules out package-level command and
-// flag variables is about the command tree, which this is not part of.
-var version string
-
 // resolveVersion returns the version --version reports, given whatever the
-// linker embedded. It takes that value as an argument rather than reading the
-// variable so a test can exercise the fallback, which is the branch every
-// binary but a released one takes.
+// linker embedded in main (empty in a binary GoReleaser did not build).
 //
 // The fallback is the module version the toolchain records: the tag for a
 // `go install …@vX.Y.Z`, and `(devel)` or a VCS-stamped pseudo-version for a
@@ -77,8 +68,8 @@ type runResult struct {
 
 // newRootCmd builds the command tree. globalFlags travels in — pflag fills
 // it in as it parses — and runResult travels back out, filled in as the tree
-// runs.
-func newRootCmd(g *globalFlags) (*cobra.Command, *runResult) {
+// runs. version is the release version main embeds, empty if none.
+func newRootCmd(g *globalFlags, version string) (*cobra.Command, *runResult) {
 	res := &runResult{}
 	cmd := &cobra.Command{
 		Use:   "atlio",
@@ -254,11 +245,12 @@ func unknownCommandCandidates(cmd *cobra.Command, arg string) []string {
 	return cmd.SuggestionsFor(arg)
 }
 
-// Execute runs the root command and returns the process exit code: 0 when it
-// succeeded, 124 when the --timeout deadline expired, and 1 for every other
-// failure. Those numbers are the contract a caller reads, so they are spelled
-// out here rather than named. The error itself is printed rather than
-// returned, since main has nothing left to do with it.
+// Execute runs the root command, reporting version for --version, and returns
+// the process exit code: 0 when it succeeded, 124 when the --timeout deadline
+// expired, and 1 for every other failure. Those numbers are the contract a
+// caller reads, so they are spelled out here rather than named. The error
+// itself is printed rather than returned, since main has nothing left to do
+// with it.
 //
 // The code comes back from a function that returns normally because os.Exit
 // skips deferred functions, so main can do nothing but pass it straight on.
@@ -271,9 +263,9 @@ func unknownCommandCandidates(cmd *cobra.Command, arg string) []string {
 //
 // The command context is left unset: cobra defaults a nil one to
 // context.Background(), which is all commandContext needs to derive from.
-func Execute() int {
+func Execute(version string) int {
 	g := &globalFlags{}
-	root, res := newRootCmd(g)
+	root, res := newRootCmd(g, version)
 	err := root.Execute()
 	if err == nil {
 		// cobra reports a mistyped subcommand under a group command by

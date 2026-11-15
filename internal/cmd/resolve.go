@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/178inaba/atlio/internal/config"
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/jira"
-	"github.com/178inaba/atlio/internal/pageref"
+	"github.com/178inaba/atlio/v2/internal/config"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/pageref"
 )
 
 // defaultConfluenceFactory builds a production client. Tests override

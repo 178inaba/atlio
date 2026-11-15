@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/178inaba/atlio/internal/config"
+	"github.com/178inaba/atlio/v2/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

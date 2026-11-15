@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
 )
 
 // Client talks to one Jira Cloud site with one set of credentials.

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/atlassian"
-	"github.com/178inaba/atlio/internal/config"
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/config"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/jira"
 )
 
 const (
@@ -186,7 +186,7 @@ func runCLI(t *testing.T, args ...string) (cliRun, error) {
 func runCLIWithStdin(t *testing.T, stdin string, args ...string) (cliRun, error) {
 	t.Helper()
 
-	root, res := newRootCmd(&globalFlags{})
+	root, res := newRootCmd(&globalFlags{}, "")
 	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
 	root.SetOut(out)
 	root.SetErr(errOut)

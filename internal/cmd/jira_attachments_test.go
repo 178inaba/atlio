@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/atlassian"
-	"github.com/178inaba/atlio/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/jira"
 )
 
 const (
@@ -81,7 +81,7 @@ func jiraAttachmentsAPI(t *testing.T, attachments ...jiraAttachment) (*[]string,
 func runJiraDownload(t *testing.T, dir, pattern string, extra ...string) (cliRun, error) {
 	t.Helper()
 
-	args := append([]string{"jira", "attachments", "download", "KAN-1", "--pattern", pattern, "-o", dir}, extra...)
+	args := append([]string{"jira", "attachments", "download", "KAN-1", "--pattern", pattern, "--dir", dir}, extra...)
 	return runCLI(t, args...)
 }
 
@@ -287,6 +287,59 @@ func TestJiraAttachmentsDownloadRequiresThePatternFlag(t *testing.T) {
 	}
 }
 
+// Every other download test passes --dir, so this one covers the shorthand.
+func TestJiraAttachmentsDownloadTakesTheDirectoryAsD(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+	startAPI(t, handler)
+
+	dir := filepath.Join(t.TempDir(), "assets")
+	if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", "-D", dir); err != nil {
+		t.Fatalf("jira attachments download -D error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
+		t.Errorf("Stat(screen.png) error = %v, want the file in %s", err, dir)
+	}
+}
+
+func TestJiraAttachmentsDownloadDefaultsToTheWorkingDirectory(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+	startAPI(t, handler)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png"); err != nil {
+		t.Fatalf("jira attachments download error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
+		t.Errorf("Stat(screen.png) error = %v, want the file in the working directory", err)
+	}
+}
+
+// -o names a file everywhere else in atlio, so the download commands take no
+// -o at all rather than one meaning a directory. pflag rejects an unknown flag
+// before RunE, so the error naming the flag is the whole check: any other
+// failure would mean the flag got through.
+func TestJiraAttachmentsDownloadRejectsOutput(t *testing.T) {
+	for _, flag := range []string{"-o", "--output"} {
+		t.Run(flag, func(t *testing.T) {
+			isolateConfig(t)
+
+			_, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", flag, t.TempDir())
+			if err == nil {
+				t.Fatalf("jira attachments download %s error = nil, want an unknown flag", flag)
+			}
+			if !strings.Contains(err.Error(), "unknown") || !strings.Contains(err.Error(), flag) {
+				t.Errorf("error = %q, want an unknown flag naming %s", err, flag)
+			}
+		})
+	}
+}
+
 func TestJiraAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
@@ -302,10 +355,15 @@ func TestJiraAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *test
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := runJiraDownload(t, dir, "*.png"); err == nil {
+	_, err := runJiraDownload(t, dir, "*.png")
+	if err == nil {
 		t.Fatal("jira attachments download error = nil, want a refusal to overwrite")
-	} else if !strings.Contains(err.Error(), existing) {
+	}
+	if !strings.Contains(err.Error(), existing) {
 		t.Errorf("error = %q, want it to name %s", err, existing)
+	}
+	if !strings.Contains(err.Error(), "--dir") {
+		t.Errorf("error = %q, want it to point at --dir", err)
 	}
 	if got, err := os.ReadFile(existing); err != nil || string(got) != "mine" {
 		t.Errorf("screen.png = %q (error %v), want it untouched", got, err)
@@ -416,7 +474,7 @@ func TestJiraAttachmentsDownloadRefusesANameWithAnIDThatStillCollides(t *testing
 		t.Errorf("content requests = %v, want none", *content)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("Stat(-o) error = %v, want nothing written, not even the directory", err)
+		t.Errorf("Stat(--dir) error = %v, want nothing written, not even the directory", err)
 	}
 }
 

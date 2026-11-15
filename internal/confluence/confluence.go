@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
 )
 
 const (

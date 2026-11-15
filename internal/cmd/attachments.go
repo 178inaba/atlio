@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/format"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/format"
 	"github.com/spf13/cobra"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -95,15 +95,7 @@ are one file on a case-insensitive filesystem), on every platform.`,
 		},
 	}
 
-	// No backticks in flag usage strings: cobra reads the first backtick
-	// pair as the flag's argument placeholder.
-	cmd.Flags().StringVar(&pattern, "pattern", "",
-		"filename glob selecting which attachments to download, e.g. *.png")
-	cmd.Flags().StringVarP(&outDir, "output", "o", ".",
-		"directory to write the downloaded files to, created if it does not exist")
-	if err := cmd.MarkFlagRequired("pattern"); err != nil {
-		panic(err)
-	}
+	addDownloadFlags(cmd, &pattern, &outDir)
 	addFormatFlag(cmd, &outFormat)
 
 	return cmd
@@ -589,6 +581,21 @@ func collidingGroups(items []string, key func(string) string) [][]string {
 	return groups
 }
 
+// addDownloadFlags registers the flags both download commands take, so the
+// two keep one contract and the flag planDownloads' refusal names exists on
+// each.
+func addDownloadFlags(cmd *cobra.Command, pattern, dir *string) {
+	// No backticks in flag usage strings: cobra reads the first backtick
+	// pair as the flag's argument placeholder.
+	cmd.Flags().StringVar(pattern, "pattern", "",
+		"filename glob selecting which attachments to download, e.g. *.png")
+	cmd.Flags().StringVarP(dir, "dir", "D", ".",
+		"directory to write the downloaded files to, created if it does not exist")
+	if err := cmd.MarkFlagRequired("pattern"); err != nil {
+		panic(err)
+	}
+}
+
 // planDownloads resolves where each matched attachment will be written, and
 // refuses the whole run if two of them would be one file or any of those files
 // already exists.
@@ -634,7 +641,7 @@ func planDownloads(matched []attachmentFile, outDir string) ([]plannedDownload, 
 	}
 
 	if len(collisions) > 0 {
-		return nil, fmt.Errorf("refusing to overwrite %s; delete them or pass a different -o "+
+		return nil, fmt.Errorf("refusing to overwrite %s; delete them or pass a different --dir "+
 			"(nothing was downloaded)", strings.Join(collisions, ", "))
 	}
 	return planned, nil

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/sidecar"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/sidecar"
 )
 
 const (

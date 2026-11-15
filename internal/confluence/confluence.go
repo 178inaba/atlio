@@ -462,7 +462,8 @@ type Attachment struct {
 	DownloadLink string `json:"downloadLink"`
 }
 
-// PageAttachments lists the files attached to a page.
+// PageAttachments lists the files attached to a page, up to limit; a limit of
+// zero or less reads them all.
 func (c *Client) PageAttachments(ctx context.Context, pageID string, limit int) ([]Attachment, bool, error) {
 	path := "/api/v2/pages/" + url.PathEscape(pageID) + "/attachments"
 	return paginate[Attachment](ctx, c, path, nil, limit, nil)
@@ -470,8 +471,8 @@ func (c *Client) PageAttachments(ctx context.Context, pageID string, limit int) 
 
 // AllPageAttachments lists every file attached to a page, following the
 // listing to its end, for a caller whose answer would be wrong rather than
-// merely short if an attachment were left unread. The caller's deadline is
-// what bounds it.
+// merely short if an attachment were left unread. Only the caller's context
+// bounds it.
 func (c *Client) AllPageAttachments(ctx context.Context, pageID string) ([]Attachment, error) {
 	all, _, err := c.PageAttachments(ctx, pageID, 0)
 	return all, err

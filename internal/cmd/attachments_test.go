@@ -495,6 +495,9 @@ type uploadRequest struct {
 func withAttachmentListing(t *testing.T, pages [][]string, next http.HandlerFunc) (*int, http.HandlerFunc) {
 	t.Helper()
 
+	if len(pages) == 0 {
+		pages = [][]string{nil}
+	}
 	listings := 0
 	return &listings, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != attachmentsListPath {
@@ -514,13 +517,11 @@ func withAttachmentListing(t *testing.T, pages [][]string, next http.HandlerFunc
 		}
 		results := []map[string]any{}
 		links := map[string]any{}
-		if i < len(pages) {
-			for _, title := range pages[i] {
-				results = append(results, map[string]any{"title": title})
-			}
-			if i+1 < len(pages) {
-				links["next"] = fmt.Sprintf("%s?cursor=%d", strings.TrimPrefix(attachmentsListPath, "/wiki"), i+1)
-			}
+		for _, title := range pages[i] {
+			results = append(results, map[string]any{"title": title})
+		}
+		if i+1 < len(pages) {
+			links["next"] = fmt.Sprintf("%s?cursor=%d", strings.TrimPrefix(attachmentsListPath, "/wiki"), i+1)
 		}
 		payload, err := json.Marshal(map[string]any{"results": results, "_links": links})
 		if err != nil {

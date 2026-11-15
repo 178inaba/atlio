@@ -473,8 +473,7 @@ func (c *Client) PageAttachments(ctx context.Context, pageID string, limit int) 
 // merely short if an attachment were left unread. The caller's deadline is
 // what bounds it.
 func (c *Client) AllPageAttachments(ctx context.Context, pageID string) ([]Attachment, error) {
-	path := "/api/v2/pages/" + url.PathEscape(pageID) + "/attachments"
-	all, _, err := paginate[Attachment](ctx, c, path, nil, 0, nil)
+	all, _, err := c.PageAttachments(ctx, pageID, 0)
 	return all, err
 }
 

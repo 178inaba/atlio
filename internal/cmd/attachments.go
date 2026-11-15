@@ -355,20 +355,17 @@ func runAttachmentsUpload(cmd *cobra.Command, args []string, g *globalFlags, rep
 }
 
 // existingNameConflicts describes each file whose base name the page already
-// has an attachment under, compared as localFileKey compares names. That is
-// wider than the ASCII case Confluence has been seen to merge, deliberately:
-// refusing a name Confluence would keep apart costs a --replace, while
-// letting one through it would merge adds a version to an existing file.
+// has an attachment under, as attachmentNameKey compares them.
 func existingNameConflicts(files []*os.File, attachments []confluence.Attachment) []string {
 	byKey := map[string][]string{}
 	for _, a := range attachments {
-		key := localFileKey(a.Title)
+		key := attachmentNameKey(a.Title)
 		byKey[key] = append(byKey[key], a.Title)
 	}
 
 	var conflicts []string
 	for _, f := range files {
-		if titles := byKey[localFileKey(filepath.Base(f.Name()))]; len(titles) > 0 {
+		if titles := byKey[attachmentNameKey(filepath.Base(f.Name()))]; len(titles) > 0 {
 			conflicts = append(conflicts, fmt.Sprintf("%s matches the page's attachment %s",
 				f.Name(), strings.Join(titles, ", ")))
 		}
@@ -396,14 +393,8 @@ func openUploads(paths []string) ([]*os.File, error) {
 		files    []*os.File
 		problems []string
 	)
-	// Keyed as existingNameConflicts compares, since Confluence would take
-	// base names differing only in case as one attachment.
-	byKey := map[string][]string{}
-	key := func(p string) string { return localFileKey(filepath.Base(p)) }
 
 	for _, p := range paths {
-		byKey[key(p)] = append(byKey[key(p)], p)
-
 		f, problem := openRegular(p)
 		if problem != "" {
 			problems = append(problems, problem)
@@ -412,15 +403,10 @@ func openUploads(paths []string) ([]*os.File, error) {
 		files = append(files, f)
 	}
 
-	// Ordered by first appearance, so the message follows the command line.
-	// Each name is dropped once reported, which is what keeps one path given
-	// twice from being reported twice.
-	for _, p := range paths {
-		if same := byKey[key(p)]; len(same) > 1 {
-			problems = append(problems, fmt.Sprintf("%s would all be attached as one attachment",
-				strings.Join(same, ", ")))
-			delete(byKey, key(p))
-		}
+	sameAttachment := func(p string) string { return attachmentNameKey(filepath.Base(p)) }
+	for _, same := range collidingGroups(paths, sameAttachment) {
+		problems = append(problems, fmt.Sprintf("%s would all be attached as one attachment",
+			strings.Join(same, ", ")))
 	}
 
 	if len(problems) > 0 {
@@ -552,29 +538,39 @@ func isPlainFilename(name string) bool {
 // APFS does. It is Unicode's canonical caseless matching, NFD(fold(NFD(name))),
 // whose inner NFD is what lets a decomposed spelling fold like a composed one.
 // The answer is the same on every platform, so a page or issue downloads the
-// same files everywhere. Uploads compare attachment names with it too, as a
-// superset of the case-insensitive matching Confluence applies to them.
+// same files everywhere.
 func localFileKey(name string) string {
 	return norm.NFD.String(cases.Fold().String(norm.NFD.String(name)))
 }
 
-// sameLocalFileGroups returns, in first-appearance order, every group of two or
-// more names that would be one file, as localFileKey defines it.
-func sameLocalFileGroups(names []string) [][]string {
+// attachmentNameKey is equal for two filenames Confluence may take as one
+// attachment. Confluence has been seen to match names ignoring ASCII case;
+// whether it also merges names differing in full case folding or Unicode
+// normalisation is unknown, so this is the wider localFileKey. Erring wide is
+// the safe side for an upload: refusing a name Confluence would keep apart
+// costs a --replace, while letting through one it would merge adds a version
+// to an existing file.
+func attachmentNameKey(name string) string {
+	return localFileKey(name)
+}
+
+// collidingGroups returns, in first-appearance order, every group of two or
+// more items whose key is equal.
+func collidingGroups(items []string, key func(string) string) [][]string {
 	byKey := map[string][]string{}
 	var order []string
-	for _, name := range names {
-		key := localFileKey(name)
-		if _, seen := byKey[key]; !seen {
-			order = append(order, key)
+	for _, item := range items {
+		k := key(item)
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
 		}
-		byKey[key] = append(byKey[key], name)
+		byKey[k] = append(byKey[k], item)
 	}
 
 	var groups [][]string
-	for _, key := range order {
-		if len(byKey[key]) > 1 {
-			groups = append(groups, byKey[key])
+	for _, k := range order {
+		if len(byKey[k]) > 1 {
+			groups = append(groups, byKey[k])
 		}
 	}
 	return groups
@@ -599,7 +595,7 @@ func planDownloads(matched []attachmentFile, outDir string) ([]plannedDownload, 
 		names = append(names, a.localName())
 	}
 	var sameFile []string
-	for _, group := range sameLocalFileGroups(names) {
+	for _, group := range collidingGroups(names, localFileKey) {
 		sameFile = append(sameFile, strings.Join(group, " and "))
 	}
 	if len(sameFile) > 0 {

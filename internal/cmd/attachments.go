@@ -124,10 +124,14 @@ attachment where it should appear, and update:
   atlio confluence update -f page.xml
 
 A file whose name the page already has an attachment under is refused, and
-then none of the files are attached. --replace uploads it as a new version of
-that attachment instead, keeping its history, and creates the rest. The page
-shows the new version without a ` + "`confluence update`" + `, so retaking a screenshot
-that is already on the page is this one command.
+then none of the files are attached. Names are compared ignoring case and
+Unicode normalisation, as Confluence would otherwise take A.png as a new
+version of a.png, and the page's attachments are listed to check this before
+anything is sent. --replace uploads it as a new version of that attachment
+instead, keeping its history, and creates the rest; for a name differing in
+case that is the existing attachment, and the output reports its name. The
+page shows the new version without a ` + "`confluence update`" + `, so retaking a
+screenshot that is already on the page is this one command.
 
 All files go in one request, and --timeout is the deadline for the whole
 upload: raise it for a large file. The site's attachment size limit is not
@@ -148,7 +152,7 @@ did land, and with --replace it adds another, identical version.`,
 	}
 
 	cmd.Flags().BoolVar(&replace, "replace", false,
-		"add a new version to an attachment the page already has under the same name, instead of refusing")
+		"add a new version to an attachment the page already has under the same name, ignoring case, instead of refusing")
 	addFormatFlag(cmd, &outFormat)
 
 	return cmd

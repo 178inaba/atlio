@@ -260,18 +260,27 @@ For the images the body actually uses, `--attachments` does that as part of the 
 atlio confluence read 123456 --markdown --attachments ./assets
 ```
 
-The referenced attachments land in `./assets`, and the Markdown links to them
-(`![main.png](./assets/main.png)`) so an image can be opened straight from the body. It requires
-`--markdown` — a storage body is written back verbatim, so there would be nothing to link the files
-from — and it fetches only what the body references; the page's other attachments are the
-`confluence attachments` commands' job. The link is the directory as you passed it joined with the
-filename, so it resolves from the working directory, the same as `-o`.
+Each referenced attachment lands in `./assets/<attachment ID>/v<version>/<filename>`, the version
+the page lists, and the Markdown links to it (`![main.png](./assets/att123/v2/main.png)`) so an
+image can be opened straight from the body. It requires `--markdown` — a storage body is written back
+verbatim, so there would be nothing to link the files from — and it fetches only what the body
+references; the page's other attachments are the `confluence attachments` commands' job. The link is
+the directory as you passed it joined with that path, so it resolves from the working directory, the
+same as `-o`.
+
+The path belongs to one version of one attachment: another page's `main.png` has another ID, and a
+new version after `confluence attachments upload --replace` gets its own `v<version>` directory, so
+several pages can share one `--attachments` directory and no image is linked to another file's
+bytes. A file already at that path is therefore the same attachment version, and is kept — not
+replaced, and not downloaded again — so reading the same page twice is cheap and never overwrites
+anything. Older versions' files stay where they are; clearing the directory is up to you. Files are
+written as `confluence attachments download` writes its own (below), so an interrupted read leaves
+at most a hidden `.atlio-*.tmp` file rather than a partial file at that path — except on a
+filesystem that cannot rename without replacing, where a partial file can be left there, and is
+then reused by every later read until you delete it.
 
 An attachment that cannot be fetched leaves the image rendered as its filename rather than failing
-the read, and is counted in `Unchecked:` above. A file already sitting at the destination is kept —
-not replaced, and not downloaded again — so reading the same page twice is cheap and never
-overwrites anything. (`confluence attachments download` refuses the whole run on such a collision; a
-read cannot, or re-reading a page would stop working the second time.)
+the read, and is counted in `Unchecked:` above.
 
 For an attachment the body does not reference — a PDF linked from the text, a spreadsheet — use the
 `confluence attachments` commands directly. `confluence attachments list` shows every attachment's
@@ -293,6 +302,14 @@ An existing file is never replaced. If any matching attachment would overwrite o
 fails before downloading anything and names the file, so a run can never leave some files replaced
 and others not — delete them, or point `-o` somewhere else. `-o` defaults to the working directory
 and is created if it does not exist.
+
+Each file is downloaded to a hidden temporary file (`.atlio-*.tmp`) in the same directory and moved
+to its name only once it is complete, and the move refuses an existing file too, so a file that
+appears during the download is not replaced either. An interrupted download — a failure, Ctrl-C, a
+crash — therefore leaves no partial file under an attachment's name, at most the temporary file,
+which is safe to delete. The exception is a filesystem that cannot rename without replacing: there
+the name is created and written directly, still never replacing a file, and an interrupted download
+can leave a partial file under it.
 
 Two matching attachments that would be one file are refused the same way, before anything is
 downloaded. Names are compared ignoring case and Unicode normalisation — `a.png` and `A.png`, or the
@@ -484,8 +501,10 @@ atlio jira attachments download KAN-1 --pattern '*.png' -o ./assets
 The contract is `confluence attachments download`'s: `--pattern` is **required** and
 case-sensitive (`--pattern '*'` is the only "download everything"), matching nothing is an error
 that says how many attachments the issue has, an existing file is never replaced — the command
-fails before downloading anything and names it — and `-o` defaults to the working directory and is
-created if it does not exist.
+fails before downloading anything and names it — each file goes through a hidden `.atlio-*.tmp`
+file the same way, so an interrupted download leaves no partial file under an attachment's name
+except on a filesystem that cannot rename without replacing, and `-o` defaults to the working
+directory and is created if it does not exist.
 
 Jira lets two attachments on one issue share a filename, and `--pattern` cannot pick one of them.
 When two matched attachments have filenames that would be one file — equal ignoring case and

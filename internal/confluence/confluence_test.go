@@ -566,15 +566,15 @@ func TestCreateFooterCommentPostsAStorageBodyUnescaped(t *testing.T) {
 	}
 }
 
-func TestPageAttachmentsListsTitleMediaTypeSizeAndDownloadLink(t *testing.T) {
+func TestPageAttachmentsListsIDVersionTitleMediaTypeAndSize(t *testing.T) {
 	var gotPath string
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		_, _ = fmt.Fprint(w, `{"results":[
 			{"id":"att1","title":"screenshot.png","mediaType":"image/png","fileSize":46982,
-			 "downloadLink":"/rest/api/content/10/child/attachment/att1/download"},
+			 "version":{"number":3},"downloadLink":"/rest/api/content/10/child/attachment/att1/download"},
 			{"id":"att2","title":"spec.pdf","mediaType":"application/pdf","fileSize":3841203,
-			 "downloadLink":"/rest/api/content/10/child/attachment/att2/download"}
+			 "version":{"number":1},"downloadLink":"/rest/api/content/10/child/attachment/att2/download"}
 		],"_links":{}}`)
 	})
 
@@ -591,12 +591,12 @@ func TestPageAttachmentsListsTitleMediaTypeSizeAndDownloadLink(t *testing.T) {
 
 	want := []Attachment{
 		{
-			Title: "screenshot.png", MediaType: "image/png", FileSize: 46982,
-			DownloadLink: "/rest/api/content/10/child/attachment/att1/download",
+			ID: "att1", Title: "screenshot.png", MediaType: "image/png", FileSize: 46982,
+			Version: AttachmentVersion{Number: 3},
 		},
 		{
-			Title: "spec.pdf", MediaType: "application/pdf", FileSize: 3841203,
-			DownloadLink: "/rest/api/content/10/child/attachment/att2/download",
+			ID: "att2", Title: "spec.pdf", MediaType: "application/pdf", FileSize: 3841203,
+			Version: AttachmentVersion{Number: 1},
 		},
 	}
 	if !slices.Equal(attachments, want) {
@@ -782,83 +782,41 @@ func TestUploadAttachmentsMarksARefusedPost(t *testing.T) {
 // visibly rather than passing the assertion by luck.
 var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x42}
 
-func TestDownloadAttachmentStreamsTheBodyUnchanged(t *testing.T) {
-	var gotPath string
+// The version goes in the query of the documented download endpoint, which
+// otherwise serves whatever version is latest when the request arrives, and
+// the path is joined onto the base URL with its /wiki prefix kept.
+func TestDownloadAttachmentPinsTheVersionAndStreamsTheBodyUnchanged(t *testing.T) {
+	var gotPath, gotVersion string
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
+		gotPath = r.URL.EscapedPath()
+		gotVersion = r.URL.Query().Get("version")
 		_, _ = w.Write(pngBytes)
 	})
 
 	var buf bytes.Buffer
-	n, err := client.DownloadAttachment(
-		t.Context(), "/rest/api/content/10/child/attachment/att1/download", &buf)
+	n, err := client.DownloadAttachment(t.Context(), "10", "att 1", 2, &buf)
 	if err != nil {
 		t.Fatalf("DownloadAttachment() error = %v", err)
 	}
 
-	if gotPath != "/wiki/rest/api/content/10/child/attachment/att1/download" {
-		t.Errorf("path = %q, want the download link joined onto the base URL", gotPath)
+	if want := "/wiki/rest/api/content/10/child/attachment/att%201/download"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
 	}
-	if !bytes.Equal(buf.Bytes(), pngBytes) {
-		t.Errorf("body = %v, want the served bytes verbatim %v", buf.Bytes(), pngBytes)
+	if gotVersion != "2" {
+		t.Errorf("version = %q, want 2", gotVersion)
 	}
-	if n != int64(len(pngBytes)) {
-		t.Errorf("n = %d, want %d", n, len(pngBytes))
+	if !bytes.Equal(buf.Bytes(), pngBytes) || n != int64(len(pngBytes)) {
+		t.Errorf("body = %v (%d bytes), want the served bytes verbatim", buf.Bytes(), n)
 	}
 }
 
-func TestAttachmentURL(t *testing.T) {
-	client, err := New("https://example.atlassian.net", "a@example.com", "t")
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+func TestDownloadAttachmentRefusesAMissingVersion(t *testing.T) {
+	client := newTestClient(t, func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL)
+	})
 
-	tests := []struct {
-		name    string
-		link    string
-		want    string
-		wantErr bool
-	}{
-		{
-			// Concatenated, not resolved: ResolveReference would read the
-			// leading slash as site-root-relative and drop /wiki.
-			name: "keeps the wiki prefix",
-			link: "/rest/api/content/10/child/attachment/att1/download",
-			want: "https://example.atlassian.net/wiki/rest/api/content/10/child/attachment/att1/download",
-		},
-		{
-			name: "keeps the query the API put on the link",
-			link: "/rest/api/content/10/child/attachment/att1/download?version=1&api=v2",
-			want: "https://example.atlassian.net/wiki/rest/api/content/10/child/attachment/att1/download?version=1&api=v2",
-		},
-		{
-			name: "passes an absolute link through",
-			link: "https://media-cdn.example.com/signed/blob",
-			want: "https://media-cdn.example.com/signed/blob",
-		},
-		{name: "rejects a link that is neither absolute nor rooted", link: "rest/api/x", wantErr: true},
-		{name: "rejects an empty link", link: "", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := client.attachmentURL(tt.link)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("attachmentURL(%q) error = nil, want an error", tt.link)
-				}
-				if !strings.Contains(err.Error(), tt.link) {
-					t.Errorf("error = %q, want it to name the link %q", err, tt.link)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("attachmentURL(%q) error = %v", tt.link, err)
-			}
-			if got != tt.want {
-				t.Errorf("attachmentURL(%q) = %q, want %q", tt.link, got, tt.want)
-			}
-		})
+	if _, err := client.DownloadAttachment(t.Context(), "10", "att1", 0, io.Discard); err == nil {
+		t.Fatal("DownloadAttachment() error = nil, want a refusal to download without a version")
 	}
 }
 

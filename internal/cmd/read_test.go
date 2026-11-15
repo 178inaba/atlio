@@ -17,9 +17,15 @@ import (
 // pageResponse renders a GET /pages/{id} body with the given storage value.
 func pageResponse(t *testing.T, body, webui string) string {
 	t.Helper()
+	return pageResponseFor(t, "123456", body, webui)
+}
+
+// pageResponseFor is pageResponse for a page other than 123456.
+func pageResponseFor(t *testing.T, pageID, body, webui string) string {
+	t.Helper()
 
 	payload, err := json.Marshal(map[string]any{
-		"id":      "123456",
+		"id":      pageID,
 		"status":  "current",
 		"title":   "Some Page",
 		"version": map[string]any{"number": 7},
@@ -777,9 +783,16 @@ type readAttachmentsAPI struct {
 // `confluence attachments` tests use so the two paths cannot drift apart.
 func newReadAttachmentsAPI(t *testing.T, body string, attachments ...attachment) (*readAttachmentsAPI, http.HandlerFunc) {
 	t.Helper()
+	return newPageReadAttachmentsAPI(t, "123456", body, attachments...)
+}
 
-	downloads, serveAttachments := attachmentsAPI(t, attachments...)
+// newPageReadAttachmentsAPI is newReadAttachmentsAPI for any page.
+func newPageReadAttachmentsAPI(t *testing.T, pageID, body string, attachments ...attachment) (*readAttachmentsAPI, http.HandlerFunc) {
+	t.Helper()
+
+	downloads, serveAttachments := pageAttachmentsAPI(t, pageID, attachments...)
 	counts := &readAttachmentsAPI{downloads: downloads}
+	webui := "/spaces/DEV/pages/" + pageID + "/Some+Page"
 	return counts, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/attachments"):
@@ -788,8 +801,34 @@ func newReadAttachmentsAPI(t *testing.T, body string, attachments ...attachment)
 		case strings.HasSuffix(r.URL.Path, "/download"):
 			serveAttachments(w, r)
 		default:
-			_, _ = w.Write([]byte(pageResponse(t, body, testPageWebUI)))
+			_, _ = w.Write([]byte(pageResponseFor(t, pageID, body, webui)))
 		}
+	}
+}
+
+// readAttachments runs `confluence read --markdown --attachments ./assets`
+// into out and returns the Markdown it wrote.
+func readAttachments(t *testing.T, ref, out string) string {
+	t.Helper()
+	if _, err := runRead(t, ref, out, "--markdown", "--attachments", "./assets"); err != nil {
+		t.Fatalf("read error = %v", err)
+	}
+	written, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", out, err)
+	}
+	return string(written)
+}
+
+// assertFileBytes fails unless the file at p holds exactly want.
+func assertFileBytes(t *testing.T, p string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", p, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s = %q, want %q", p, got, want)
 	}
 }
 
@@ -823,32 +862,16 @@ func TestReadMarkdownDownloadsOnlyTheAttachmentsTheBodyReferences(t *testing.T) 
 	startAPI(t, handler)
 
 	t.Chdir(t.TempDir())
-	if _, err := runRead(t, testPageURL, "page.md", "--markdown", "--attachments", "./assets"); err != nil {
-		t.Fatalf("read error = %v", err)
-	}
-
-	written, err := os.ReadFile("page.md")
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	want := "![main.png](./assets/main.png)\n\n![Diagram](https://example.com/d.png)\n"
-	if string(written) != want {
+	written := readAttachments(t, testPageURL, "page.md")
+	want := "![main.png](./assets/att1/v1/main.png)\n\n![Diagram](https://example.com/d.png)\n"
+	if written != want {
 		t.Errorf("file = %q, want %q", written, want)
 	}
-
-	downloaded, err := os.ReadFile(filepath.Join("assets", "main.png"))
-	if err != nil {
-		t.Fatalf("ReadFile(assets/main.png) error = %v", err)
-	}
-	if !bytes.Equal(downloaded, pngBytes) {
-		t.Errorf("downloaded = %v, want the bytes the API served", downloaded)
-	}
+	assertFileBytes(t, filepath.Join("assets", "att1", "v1", "main.png"), attachmentBytes("att1", "1"))
 
 	// The page holds it, the body does not reference it:
 	// `confluence attachments download` is the command for pulling that one.
-	if _, err := os.Lstat(filepath.Join("assets", "unused.pdf")); !os.IsNotExist(err) {
-		t.Errorf("Lstat(assets/unused.pdf) error = %v, want the unreferenced attachment left alone", err)
-	}
+	assertGone(t, filepath.Join("assets", "att2"))
 	if *counts.downloads != 1 {
 		t.Errorf("downloads = %d, want only the referenced attachment fetched", *counts.downloads)
 	}
@@ -864,7 +887,8 @@ func TestReadMarkdownFallsBackWhenAnAttachmentCannotBeFetched(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/attachments"):
 			_, _ = w.Write([]byte(`{"results":[{"id":"att1","title":"main.png","mediaType":"image/png",` +
-				`"fileSize":11,"downloadLink":"/rest/api/content/123456/child/attachment/att1/download"}],"_links":{}}`))
+				`"fileSize":11,"version":{"number":1},` +
+				`"downloadLink":"/rest/api/content/123456/child/attachment/att1/download"}],"_links":{}}`))
 		case strings.HasSuffix(r.URL.Path, "/download"):
 			w.WriteHeader(http.StatusInternalServerError)
 		default:
@@ -895,9 +919,7 @@ func TestReadMarkdownFallsBackWhenAnAttachmentCannotBeFetched(t *testing.T) {
 	}
 
 	// The transfer took its half-written file with it.
-	if _, err := os.Lstat(filepath.Join("assets", "main.png")); !os.IsNotExist(err) {
-		t.Errorf("Lstat(assets/main.png) error = %v, want no file left behind", err)
-	}
+	assertEmptyDir(t, filepath.Join("assets", "att1", "v1"))
 }
 
 // A body with no image has nothing to resolve, so the listing is a request
@@ -923,12 +945,12 @@ func TestReadMarkdownWithNoImageAsksForNothingAndCreatesNothing(t *testing.T) {
 	}
 }
 
-// Unlike `confluence attachments download`, which refuses the whole run on a
-// collision, a read cannot fail over one: it would make re-reading a page
-// depend on the state of a directory. The existing file is kept and linked
-// instead, which makes the second read of the same page cheap and
-// non-destructive.
-func TestReadMarkdownKeepsAFileAlreadyAtTheDestination(t *testing.T) {
+// The path names the attachment and its version, so a file already there is
+// that version, and a read keeps and links it without a transfer. That is
+// also what keeps a read from failing over the state of a directory, unlike
+// `confluence attachments download`, which refuses the whole run on a
+// collision.
+func TestReadMarkdownKeepsTheFileAlreadyAtTheVersionsPath(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
 	counts, handler := newReadAttachmentsAPI(t, imageBody,
@@ -937,36 +959,207 @@ func TestReadMarkdownKeepsAFileAlreadyAtTheDestination(t *testing.T) {
 	startAPI(t, handler)
 
 	t.Chdir(t.TempDir())
-	if err := os.Mkdir("assets", 0o755); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
+	dest := filepath.Join("assets", "att1", "v1", "main.png")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	const existing = "not the attachment"
-	if err := os.WriteFile(filepath.Join("assets", "main.png"), []byte(existing), 0o644); err != nil {
+	const existing = "already downloaded"
+	if err := os.WriteFile(dest, []byte(existing), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := runRead(t, testPageURL, "page.md", "--markdown", "--attachments", "./assets"); err != nil {
-		t.Fatalf("read error = %v", err)
-	}
-
-	kept, err := os.ReadFile(filepath.Join("assets", "main.png"))
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if string(kept) != existing {
-		t.Errorf("file = %q, want the existing file left as it was", kept)
-	}
+	written := readAttachments(t, testPageURL, "page.md")
+	assertFileBytes(t, dest, []byte(existing))
 	if *counts.downloads != 0 {
 		t.Errorf("downloads = %d, want the existing file reused rather than fetched", *counts.downloads)
 	}
-
-	written, err := os.ReadFile("page.md")
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if !strings.Contains(string(written), "![main.png](./assets/main.png)") {
+	if !strings.Contains(written, "![main.png](./assets/att1/v1/main.png)") {
 		t.Errorf("file = %q, want it to link the kept file", written)
 	}
+}
+
+// A file sitting at the bare filename — another page's attachment, or an older
+// version — is no evidence of anything, so it is neither linked nor touched.
+func TestReadMarkdownIgnoresAFileAtTheBareFilename(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes)},
+	)
+	startAPI(t, handler)
+
+	t.Chdir(t.TempDir())
+	bare := filepath.Join("assets", "main.png")
+	if err := os.MkdirAll("assets", 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(bare, []byte("someone else's"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	written := readAttachments(t, testPageURL, "page.md")
+	if !strings.Contains(written, "![main.png](./assets/att1/v1/main.png)") {
+		t.Errorf("file = %q, want it to link the attachment's own path", written)
+	}
+	assertFileBytes(t, filepath.Join("assets", "att1", "v1", "main.png"), attachmentBytes("att1", "1"))
+	assertFileBytes(t, bare, []byte("someone else's"))
+}
+
+// The download is pinned to the version the listing reported, which is the
+// version the path names.
+func TestReadMarkdownWritesTheListedVersionUnderItsIDAndVersion(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes), version: 2},
+	)
+	startAPI(t, handler)
+
+	t.Chdir(t.TempDir())
+	written := readAttachments(t, testPageURL, "page.md")
+	if !strings.Contains(written, "![main.png](./assets/att1/v2/main.png)") {
+		t.Errorf("file = %q, want it to link assets/att1/v2/main.png", written)
+	}
+	assertFileBytes(t, filepath.Join("assets", "att1", "v2", "main.png"), attachmentBytes("att1", "2"))
+}
+
+func TestReadMarkdownKeepsTwoPagesSameNamedAttachmentsApart(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, first := newPageReadAttachmentsAPI(t, "123456", imageBody,
+		attachment{id: "att10", title: "main.png", mediaType: "image/png", size: len(pngBytes)},
+	)
+	_, second := newPageReadAttachmentsAPI(t, "654321", imageBody,
+		attachment{id: "att20", title: "main.png", mediaType: "image/png", size: len(pngBytes)},
+	)
+	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/654321") {
+			second(w, r)
+			return
+		}
+		first(w, r)
+	})
+
+	t.Chdir(t.TempDir())
+	for _, tt := range []struct{ pageID, out, id string }{
+		{pageID: "123456", out: "first.md", id: "att10"},
+		{pageID: "654321", out: "second.md", id: "att20"},
+	} {
+		written := readAttachments(t, tt.pageID, tt.out)
+		link := "./assets/" + tt.id + "/v1/main.png"
+		if !strings.Contains(written, "![main.png]("+link+")") {
+			t.Errorf("%s = %q, want it to link %s", tt.out, written, link)
+		}
+	}
+	// Both checked after both reads, so the second cannot have replaced the first.
+	assertFileBytes(t, filepath.Join("assets", "att10", "v1", "main.png"), attachmentBytes("att10", "1"))
+	assertFileBytes(t, filepath.Join("assets", "att20", "v1", "main.png"), attachmentBytes("att20", "1"))
+}
+
+func TestReadMarkdownRereadDownloadsANewVersionAndLeavesTheOldOne(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	t.Chdir(t.TempDir())
+
+	_, before := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes), version: 1},
+	)
+	startAPI(t, before)
+	readAttachments(t, testPageURL, "page.md")
+
+	counts, after := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes), version: 2},
+	)
+	startAPI(t, after)
+	written := readAttachments(t, testPageURL, "page.md")
+
+	if !strings.Contains(written, "![main.png](./assets/att1/v2/main.png)") {
+		t.Errorf("file = %q, want it to link the new version", written)
+	}
+	if *counts.downloads != 1 {
+		t.Errorf("downloads = %d, want the new version fetched", *counts.downloads)
+	}
+	assertFileBytes(t, filepath.Join("assets", "att1", "v2", "main.png"), attachmentBytes("att1", "2"))
+	assertFileBytes(t, filepath.Join("assets", "att1", "v1", "main.png"), attachmentBytes("att1", "1"))
+}
+
+func TestReadMarkdownRereadWithNothingChangedRequestsNoDownload(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	counts, handler := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes)},
+	)
+	startAPI(t, handler)
+
+	t.Chdir(t.TempDir())
+	first := readAttachments(t, testPageURL, "page.md")
+	second := readAttachments(t, testPageURL, "page.md")
+
+	if *counts.downloads != 1 {
+		t.Errorf("downloads = %d, want only the first read to fetch", *counts.downloads)
+	}
+	if second != first {
+		t.Errorf("second read = %q, want the same links as the first %q", second, first)
+	}
+}
+
+// The ID and the version go into a path as the filename does, so an entry
+// whose ID is not a plain path element, or that lacks an ID or a version,
+// has no path to be written to: nothing is fetched, and the image counts as
+// unchecked rather than as settled.
+func TestReadMarkdownCountsAnAttachmentWithNoUsablePathUnchecked(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		a    attachment
+	}{
+		{name: "ID escaping the directory", a: attachment{id: "../x", title: "main.png", mediaType: "image/png"}},
+		{name: "no version", a: attachment{title: "main.png", mediaType: "image/png", version: -1}},
+		{name: "no ID", a: attachment{title: "main.png", mediaType: "image/png", noID: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			counts, handler := newReadAttachmentsAPI(t, imageBody, tt.a)
+			startAPI(t, handler)
+
+			t.Chdir(t.TempDir())
+			run, err := runRead(t, testPageURL, "page.md", "--markdown", "--attachments", "./assets", "--format", "json")
+			if err != nil {
+				t.Fatalf("read error = %v", err)
+			}
+			var result readResult
+			if err := json.Unmarshal([]byte(run.stdout), &result); err != nil {
+				t.Fatalf("Unmarshal(%q) error = %v", run.stdout, err)
+			}
+			if result.UncheckedCount != 1 {
+				t.Errorf("unchecked_count = %d, want the attachment counted", result.UncheckedCount)
+			}
+			if *counts.downloads != 0 {
+				t.Errorf("downloads = %d, want nothing fetched", *counts.downloads)
+			}
+			assertGone(t, "assets")
+		})
+	}
+}
+
+func TestReadMarkdownLeavesNoFileWhenATransferFailsPartWay(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, serveAttachments := newReadAttachmentsAPI(t, imageBody,
+		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes)},
+	)
+	serveDownload := serveTruncated(t, filepath.Join("assets", "att1", "v1", "main.png"))
+	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/download") {
+			serveDownload(w, r)
+			return
+		}
+		serveAttachments(w, r)
+	})
+
+	t.Chdir(t.TempDir())
+	readAttachments(t, testPageURL, "page.md")
+	assertEmptyDir(t, filepath.Join("assets", "att1", "v1"))
 }
 
 // The listing is what says which filenames the page holds, so when it cannot

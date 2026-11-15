@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"bytes"
+	"cmp"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -26,39 +26,65 @@ var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0
 
 const attachmentsListPath = "/wiki/api/v2/pages/123456/attachments"
 
-// attachment is one entry of the listing a test serves.
+// attachment is one entry of the listing a test serves. id defaults to
+// att<n>, n being its 1-based position, and version to 1; noID and a negative
+// version leave the field out of the listing.
 type attachment struct {
+	id        string
+	noID      bool
 	title     string
 	mediaType string
 	size      int
+	version   int
 }
 
-// attachmentsAPI answers the listing with the given attachments and every
-// download with pngBytes, counting the downloads.
+// attachmentBytes is what a download pinned to a version serves: distinct per
+// attachment and version, so a test can tell which one was written where.
+func attachmentBytes(id, version string) []byte {
+	return append(slices.Clone(pngBytes), []byte(id+"@v"+version)...)
+}
+
+// attachmentsAPI answers page 123456's listing; see pageAttachmentsAPI.
+func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.HandlerFunc) {
+	t.Helper()
+	return pageAttachmentsAPI(t, "123456", attachments...)
+}
+
+// pageAttachmentsAPI answers one page's listing with the given attachments and
+// every download with attachmentBytes for the version it names, counting the
+// downloads. A download that names no version fails the test: it would fetch
+// whatever is latest rather than what the listing described.
 //
 // Both paths are matched exactly, so a request the command should not be
 // making at all fails the test rather than being quietly answered. The
-// download path is the one the client builds from `downloadLink`, which is why
-// the listing hands out links in the API's own shape.
-func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.HandlerFunc) {
+// listing hands out download links in the API's own shape.
+func pageAttachmentsAPI(t *testing.T, pageID string, attachments ...attachment) (*int, http.HandlerFunc) {
 	t.Helper()
 
-	const downloadBase = "/wiki/rest/api/content/123456/child/attachment/"
+	listPath := "/wiki/api/v2/pages/" + pageID + "/attachments"
+	downloadBase := "/wiki/rest/api/content/" + pageID + "/child/attachment/"
 
 	downloads := 0
 	return &downloads, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == attachmentsListPath:
+		case r.URL.Path == listPath:
 			results := make([]map[string]any, 0, len(attachments))
 			for i, a := range attachments {
-				id := fmt.Sprintf("att%d", i+1)
-				results = append(results, map[string]any{
+				id := cmp.Or(a.id, fmt.Sprintf("att%d", i+1))
+				entry := map[string]any{
 					"id":           id,
 					"title":        a.title,
 					"mediaType":    a.mediaType,
 					"fileSize":     a.size,
-					"downloadLink": "/rest/api/content/123456/child/attachment/" + id + "/download",
-				})
+					"downloadLink": "/rest/api/content/" + pageID + "/child/attachment/" + id + "/download",
+				}
+				if a.version >= 0 {
+					entry["version"] = map[string]any{"number": max(a.version, 1)}
+				}
+				if a.noID {
+					delete(entry, "id")
+				}
+				results = append(results, entry)
 			}
 			payload, err := json.Marshal(map[string]any{"results": results, "_links": map[string]any{}})
 			if err != nil {
@@ -68,7 +94,14 @@ func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.Handler
 			_, _ = w.Write(payload)
 		case strings.HasPrefix(r.URL.Path, downloadBase) && strings.HasSuffix(r.URL.Path, "/download"):
 			downloads++
-			_, _ = w.Write(pngBytes)
+			version := r.URL.Query().Get("version")
+			if version == "" {
+				t.Errorf("download of %s names no version", r.URL.Path)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, downloadBase), "/download")
+			_, _ = w.Write(attachmentBytes(id, version))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -233,16 +266,10 @@ func TestAttachmentsDownloadWritesMatchingFilesUnchanged(t *testing.T) {
 		t.Fatalf("attachments download error = %v", err)
 	}
 
-	for _, name := range []string{"screenshot.png", "diagram.png"} {
-		got, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", name, err)
-		}
-		if !bytes.Equal(got, pngBytes) {
-			t.Errorf("%s = %v, want the served bytes verbatim %v", name, got, pngBytes)
-		}
-		if !strings.Contains(run.stdout, name) {
-			t.Errorf("output = %q, want it to name %s", run.stdout, name)
+	for _, f := range []struct{ name, id string }{{"screenshot.png", "att1"}, {"diagram.png", "att2"}} {
+		assertFileBytes(t, filepath.Join(dir, f.name), attachmentBytes(f.id, "1"))
+		if !strings.Contains(run.stdout, f.name) {
+			t.Errorf("output = %q, want it to name %s", run.stdout, f.name)
 		}
 	}
 	// The PDF matched nothing, so it must not have been fetched: the whole
@@ -281,8 +308,9 @@ func TestAttachmentsDownloadJSONOutput(t *testing.T) {
 		t.Fatalf("downloaded_attachments = %+v, want the single file", got.Downloaded)
 	}
 	want := filepath.Join(dir, "screenshot.png")
-	if d := got.Downloaded[0]; d.Filename != "screenshot.png" || d.Path != want || d.Bytes != int64(len(pngBytes)) {
-		t.Errorf("downloaded = %+v, want screenshot.png at %s with %d bytes", d, want, len(pngBytes))
+	wantBytes := int64(len(attachmentBytes("att1", "1")))
+	if d := got.Downloaded[0]; d.Filename != "screenshot.png" || d.Path != want || d.Bytes != wantBytes {
+		t.Errorf("downloaded = %+v, want screenshot.png at %s with %d bytes", d, want, wantBytes)
 	}
 }
 
@@ -1094,5 +1122,99 @@ func TestAttachmentsDownloadAcceptsASpaceOverviewURL(t *testing.T) {
 	}
 	if *downloads != 1 {
 		t.Errorf("downloads = %d, want the homepage's one attachment", *downloads)
+	}
+}
+
+// confluenceDownloadAPI answers the listing with one attachment and hands
+// every download to serve, so a test controls what the transfer does.
+func confluenceDownloadAPI(t *testing.T, title string, serve http.HandlerFunc) http.HandlerFunc {
+	t.Helper()
+	_, serveListing := attachmentsAPI(t, attachment{title: title, mediaType: "image/png", size: len(pngBytes)})
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/download") {
+			serve(w, r)
+			return
+		}
+		serveListing(w, r)
+	}
+}
+
+// serveTruncated declares more bytes than it sends, so the client sees the
+// connection end part-way through the body.
+//
+// Part-way through, it checks that nothing is at dest yet: the bytes in flight
+// belong in a temporary file, so a crash at this point would leave no
+// truncated file under the attachment's name.
+func serveTruncated(t *testing.T, dest string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write(pngBytes)
+		w.(http.Flusher).Flush()
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Errorf("Lstat(%s) mid-transfer error = %v, want nothing at the final path yet", dest, err)
+		}
+	}
+}
+
+// assertEmptyDir fails unless dir holds nothing: no final file and no
+// temporary file left over from the transfer.
+func assertEmptyDir(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", dir, err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s holds %v, want nothing left after the failed transfer", dir, names)
+	}
+}
+
+func TestAttachmentsDownloadLeavesNothingWhenATransferFailsPartWay(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	dir := t.TempDir()
+	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", serveTruncated(t, filepath.Join(dir, "screenshot.png"))))
+
+	if _, err := runDownload(t, dir, "*.png"); err == nil {
+		t.Fatal("attachments download error = nil, want the truncated transfer reported")
+	}
+	assertEmptyDir(t, dir)
+}
+
+// planDownloads checks every destination before the first transfer, but a file
+// can still appear at one while its bytes are in flight. The move that
+// publishes the download refuses an existing target, so that file survives.
+func TestAttachmentsDownloadKeepsAFileThatAppearsDuringTheTransfer(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "screenshot.png")
+	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", func(w http.ResponseWriter, _ *http.Request) {
+		if err := os.WriteFile(dest, []byte("theirs"), 0o600); err != nil {
+			t.Errorf("WriteFile() error = %v", err)
+		}
+		_, _ = w.Write(pngBytes)
+	}))
+
+	_, err := runDownload(t, dir, "*.png")
+	if err == nil {
+		t.Fatal("attachments download error = nil, want a refusal to replace the file that appeared")
+	}
+	if !strings.Contains(err.Error(), dest) {
+		t.Errorf("error = %q, want it to name %s", err, dest)
+	}
+	assertFileBytes(t, dest, []byte("theirs"))
+	entries, readDirErr := os.ReadDir(dir)
+	if readDirErr != nil {
+		t.Fatalf("ReadDir() error = %v", readDirErr)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d entries, want only the file that appeared, no temporary file", len(entries))
 	}
 }

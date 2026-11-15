@@ -69,6 +69,12 @@ An existing file is never replaced. If any attachment would overwrite one,
 the command fails before downloading anything and names the file, so a run
 cannot leave some files replaced and others not.
 
+Each file is downloaded to a hidden .atlio-*.tmp file in the output directory
+and moved to its name once complete, so an interrupted run leaves no partial
+file under an attachment's name, and a file that appears meanwhile is not
+replaced. On a filesystem that cannot rename without replacing, the name is
+written directly instead, and an interrupted run can leave a partial file.
+
 Jira lets two attachments on one issue share a filename, which --pattern
 cannot pick one of. When two matched attachments have filenames that would
 be one file -- equal ignoring case and Unicode normalisation, as a.png and

@@ -445,22 +445,19 @@ func (c *Client) CreateFooterComment(ctx context.Context, pageID, body string) (
 }
 
 // Attachment is one file attached to a page. Title is the filename, which is
-// what `confluence attachments download` matches its glob against. DownloadLink
-// is relative to the client's base URL (<site>/wiki), in the form
-// /rest/api/content/{pageID}/child/attachment/{attachmentID}/download.
+// what `confluence attachments download` matches its glob against.
 //
 // ID and Version together name the bytes this entry describes, which the
 // filename does not: the same name on another page is another attachment, and
 // an upload under a name the page already holds — matched ignoring case, so
 // A.png onto a page holding a.png — becomes a new version of that attachment.
-// DownloadAttachmentVersion fetches exactly these bytes.
+// DownloadAttachment fetches exactly these bytes.
 type Attachment struct {
-	ID           string            `json:"id"`
-	Title        string            `json:"title"`
-	MediaType    string            `json:"mediaType"`
-	FileSize     int64             `json:"fileSize"`
-	DownloadLink string            `json:"downloadLink"`
-	Version      AttachmentVersion `json:"version"`
+	ID        string            `json:"id"`
+	Title     string            `json:"title"`
+	MediaType string            `json:"mediaType"`
+	FileSize  int64             `json:"fileSize"`
+	Version   AttachmentVersion `json:"version"`
 }
 
 // AttachmentVersion is the version of an attachment a listing reported.
@@ -485,30 +482,27 @@ func (c *Client) AllPageAttachments(ctx context.Context, pageID string) ([]Attac
 	return all, err
 }
 
-// DownloadAttachment streams the bytes behind downloadLink to w and returns
-// how many it wrote. Errors name downloadLink as the API returned it.
+// DownloadAttachment streams one version of a page's attachment to w and
+// returns how many bytes it wrote. Errors name the request path.
+//
+// The request is the documented v1 download endpoint with the version in its
+// query; without one it serves whatever version is latest when the request
+// arrives, so an upload landing between the listing and the download would
+// hand back bytes the listing did not describe. The listing's downloadLink is
+// not used because the API documents nothing about its form, so nothing says
+// it names a version.
+//
+// The path is appended to the base URL rather than resolved against it:
+// url.URL.ResolveReference would read the leading slash as site-root-relative
+// and drop the /wiki path the base ends with.
 //
 // The download redirects once, to Atlassian's media service on another host,
 // whose signed URL rejects a request that also carries the site's
-// credentials. atlassian.Client.Download is what keeps them off it, both on
-// the redirect and for a link that already points there.
-func (c *Client) DownloadAttachment(ctx context.Context, downloadLink string, w io.Writer) (int64, error) {
-	endpoint, err := c.attachmentURL(downloadLink)
-	if err != nil {
-		return 0, err
+// credentials. atlassian.Client.Download is what keeps them off it.
+func (c *Client) DownloadAttachment(ctx context.Context, pageID, attachmentID string, version int, w io.Writer) (int64, error) {
+	if version < 1 {
+		return 0, fmt.Errorf("attachment %s has no version to download", attachmentID)
 	}
-	return c.api.Download(ctx, endpoint, downloadLink, w)
-}
-
-// DownloadAttachmentVersion streams one version of a page's attachment to w
-// and returns how many bytes it wrote.
-//
-// The request names the version in the query of the documented v1 download
-// endpoint, which serves the latest version without one. DownloadLink is not
-// used here because the API documents nothing about its form, so nothing says
-// it names a version; this is what makes the bytes the listed version's even
-// when an upload lands between the listing and the download.
-func (c *Client) DownloadAttachmentVersion(ctx context.Context, pageID, attachmentID string, version int, w io.Writer) (int64, error) {
 	path := "/rest/api/content/" + url.PathEscape(pageID) + "/child/attachment/" + url.PathEscape(attachmentID) +
 		"/download?version=" + strconv.Itoa(version)
 	return c.api.Download(ctx, c.api.BaseURL()+path, path, w)
@@ -616,32 +610,6 @@ func (c *Client) UploadAttachments(ctx context.Context, pageID string, files []U
 		})
 	}
 	return uploaded, nil
-}
-
-// attachmentURL turns the relative download link an attachment carries into an
-// absolute URL.
-//
-// The link is relative to the listing's `_links.base`, which is the base URL
-// this client derived — the same string. So the two are concatenated:
-// url.URL.ResolveReference would read the leading slash as site-root-relative
-// and drop the /wiki path the base ends with, addressing a host that serves
-// nothing there.
-//
-// A link that is neither absolute nor rooted at / is an error rather than a
-// guess: every shape the API has been observed to return is one of those two,
-// and a third would mean the assumption above no longer holds.
-func (c *Client) attachmentURL(downloadLink string) (string, error) {
-	u, err := url.Parse(downloadLink)
-	if err != nil {
-		return "", fmt.Errorf("parse download link %q: %w", downloadLink, err)
-	}
-	if u.IsAbs() {
-		return u.String(), nil
-	}
-	if !strings.HasPrefix(downloadLink, "/") {
-		return "", fmt.Errorf("download link %q is neither absolute nor rooted at /", downloadLink)
-	}
-	return c.api.BaseURL() + downloadLink, nil
 }
 
 // SearchResult is one CQL hit. Content is absent for results that are not

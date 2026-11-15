@@ -256,7 +256,7 @@ func runAttachmentsDownload(cmd *cobra.Command, args []string, g *globalFlags, p
 
 	files := make([]attachmentFile, 0, len(attachments))
 	for _, a := range attachments {
-		files = append(files, confluenceAttachmentFile(client, a))
+		files = append(files, confluenceAttachmentFile(client, pageID, a))
 	}
 	matched, err := matchAttachments(files, pattern)
 	if err != nil {
@@ -503,24 +503,14 @@ func (a attachmentFile) localName() string {
 	return cmp.Or(a.saveAs, a.filename)
 }
 
-// confluenceAttachmentFile adapts a page attachment to the download paths.
-func confluenceAttachmentFile(client *confluence.Client, a confluence.Attachment) attachmentFile {
+// confluenceAttachmentFile adapts a page attachment to the download paths,
+// fetching the version the listing reported rather than whatever is latest
+// when the request arrives.
+func confluenceAttachmentFile(client *confluence.Client, pageID string, a confluence.Attachment) attachmentFile {
 	return attachmentFile{
 		filename: a.Title,
 		fetch: func(ctx context.Context, w io.Writer) (int64, error) {
-			return client.DownloadAttachment(ctx, a.DownloadLink, w)
-		},
-	}
-}
-
-// confluencePinnedAttachmentFile adapts a page attachment to the download
-// paths, fetching the version the listing reported rather than whatever is
-// latest when the request arrives.
-func confluencePinnedAttachmentFile(client *confluence.Client, pageID string, a confluence.Attachment) attachmentFile {
-	return attachmentFile{
-		filename: a.Title,
-		fetch: func(ctx context.Context, w io.Writer) (int64, error) {
-			return client.DownloadAttachmentVersion(ctx, pageID, a.ID, a.Version.Number, w)
+			return client.DownloadAttachment(ctx, pageID, a.ID, a.Version.Number, w)
 		},
 	}
 }
@@ -532,18 +522,21 @@ type plannedDownload struct {
 	dest string
 }
 
-// attachmentDest resolves the file an attachment is written to under outDir.
+// attachmentDest resolves the file an attachment is written to under outDir,
+// elems being the path below it.
 //
-// The filename comes from the server, so it is also what pins the write inside
-// outDir: a filename carrying a path would otherwise land somewhere the caller
+// The elements come from the server, so they are also what pins the write
+// inside outDir: one carrying a path would otherwise land somewhere the caller
 // never named. Base is the local filesystem's idea of a separator, which is
 // the right one — this is a path being built, not a pattern being matched.
-func attachmentDest(filename, outDir string) (string, error) {
-	if !isPlainFilename(filename) {
-		return "", fmt.Errorf("attachment %q is not a plain filename; "+
-			"refusing to write it outside %s", filename, outDir)
+func attachmentDest(outDir string, elems ...string) (string, error) {
+	for _, elem := range elems {
+		if !isPlainFilename(elem) {
+			return "", fmt.Errorf("attachment %q is not a plain filename; "+
+				"refusing to write it outside %s", elem, outDir)
+		}
 	}
-	return filepath.Join(outDir, filename), nil
+	return filepath.Join(append([]string{outDir}, elems...)...), nil
 }
 
 // isPlainFilename reports whether a name the server supplied can be joined to
@@ -627,7 +620,7 @@ func planDownloads(matched []attachmentFile, outDir string) ([]plannedDownload, 
 	var collisions []string
 
 	for _, a := range matched {
-		dest, err := attachmentDest(a.localName(), outDir)
+		dest, err := attachmentDest(outDir, a.localName())
 		if err != nil {
 			return nil, err
 		}

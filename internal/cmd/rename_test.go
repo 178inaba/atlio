@@ -18,17 +18,6 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	return p
 }
 
-func assertContent(t *testing.T, p, want string) {
-	t.Helper()
-	got, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", p, err)
-	}
-	if string(got) != want {
-		t.Errorf("%s = %q, want %q", p, got, want)
-	}
-}
-
 func assertGone(t *testing.T, p string) {
 	t.Helper()
 	if _, err := os.Lstat(p); !os.IsNotExist(err) {
@@ -44,7 +33,7 @@ func TestRenameNoReplaceMovesToAFreeName(t *testing.T) {
 	if err := renameNoReplace(src, dest); err != nil {
 		t.Fatalf("renameNoReplace() error = %v", err)
 	}
-	assertContent(t, dest, "new")
+	assertFileBytes(t, dest, []byte("new"))
 	assertGone(t, src)
 }
 
@@ -56,8 +45,8 @@ func TestRenameNoReplaceRefusesAnExistingTarget(t *testing.T) {
 	if err := renameNoReplace(src, dest); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("renameNoReplace() error = %v, want fs.ErrExist", err)
 	}
-	assertContent(t, dest, "old")
-	assertContent(t, src, "new")
+	assertFileBytes(t, dest, []byte("old"))
+	assertFileBytes(t, src, []byte("new"))
 }
 
 // unsupportedMove stands in for a filesystem with no no-replace move.
@@ -79,7 +68,7 @@ func TestPublishFile(t *testing.T) {
 			if err := publishFile(tmp, dest, tt.move); err != nil {
 				t.Fatalf("publishFile() error = %v", err)
 			}
-			assertContent(t, dest, "bytes")
+			assertFileBytes(t, dest, []byte("bytes"))
 			assertGone(t, tmp)
 		})
 
@@ -91,7 +80,7 @@ func TestPublishFile(t *testing.T) {
 			if err := publishFile(tmp, dest, tt.move); !errors.Is(err, fs.ErrExist) {
 				t.Fatalf("publishFile() error = %v, want fs.ErrExist", err)
 			}
-			assertContent(t, dest, "old")
+			assertFileBytes(t, dest, []byte("old"))
 			assertGone(t, tmp)
 		})
 	}

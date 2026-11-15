@@ -361,7 +361,7 @@ func downloadReferencedAttachments(
 	}
 
 	unchecked := 0
-	var paths map[string]string
+	paths := make(map[string]string, len(filenames))
 	for _, filename := range filenames {
 		a, ok := byFilename[filename]
 		if !ok {
@@ -373,37 +373,26 @@ func downloadReferencedAttachments(
 			continue
 		}
 
-		elems, ok := attachmentPathElems(a)
-		if !ok {
+		// An entry with no version has no path that names its bytes. The ID
+		// and the filename come from the server, and attachmentDest checks
+		// them as it checks every name a page gives.
+		if a.Version.Number < 1 {
 			unchecked++
 			continue
 		}
-		p := plannedDownload{
-			file: confluencePinnedAttachmentFile(client, pageID, a),
-			dest: filepath.Join(append([]string{dir}, elems...)...),
-		}
-		if !fetchAttachment(ctx, p) {
+		elems := []string{a.ID, "v" + strconv.Itoa(a.Version.Number), a.Title}
+		dest, err := attachmentDest(dir, elems...)
+		if err != nil {
 			unchecked++
 			continue
 		}
-		if paths == nil {
-			paths = make(map[string]string, len(filenames))
+		if !fetchAttachment(ctx, confluenceAttachmentFile(client, pageID, a), dest) {
+			unchecked++
+			continue
 		}
 		paths[filename] = attachmentLink(dir, elems)
 	}
 	return paths, unchecked
-}
-
-// attachmentPathElems returns the path elements an attachment is written under
-// below the --attachments directory — its ID, v<version> and its filename — or
-// false if it has none. The ID and the filename come from the server and go
-// into a path, so both pass isPlainFilename; an entry missing its ID or its
-// version has no path that names its bytes.
-func attachmentPathElems(a confluence.Attachment) ([]string, bool) {
-	if !isPlainFilename(a.ID) || !isPlainFilename(a.Title) || a.Version.Number < 1 {
-		return nil, false
-	}
-	return []string{a.ID, "v" + strconv.Itoa(a.Version.Number), a.Title}, true
 }
 
 // fetchAttachment writes one attachment to its destination unless a file is
@@ -420,16 +409,16 @@ func attachmentPathElems(a confluence.Attachment) ([]string, bool) {
 // after the check is still kept: the move refuses to replace it, and the
 // fs.ErrExist it reports means the same version is there. The directory is
 // created only for a transfer, so a read that fetches nothing creates nothing.
-func fetchAttachment(ctx context.Context, p plannedDownload) bool {
-	if _, err := os.Lstat(p.dest); err == nil {
+func fetchAttachment(ctx context.Context, file attachmentFile, dest string) bool {
+	if _, err := os.Lstat(dest); err == nil {
 		return true
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
-	if err := os.MkdirAll(filepath.Dir(p.dest), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return false
 	}
-	if _, err := downloadToFile(ctx, p.file, p.dest); err != nil {
+	if _, err := downloadToFile(ctx, file, dest); err != nil {
 		return errors.Is(err, fs.ErrExist)
 	}
 	return true

@@ -871,9 +871,7 @@ func TestReadMarkdownDownloadsOnlyTheAttachmentsTheBodyReferences(t *testing.T) 
 
 	// The page holds it, the body does not reference it:
 	// `confluence attachments download` is the command for pulling that one.
-	if _, err := os.Lstat(filepath.Join("assets", "att2")); !os.IsNotExist(err) {
-		t.Errorf("Lstat(assets/att2) error = %v, want the unreferenced attachment left alone", err)
-	}
+	assertGone(t, filepath.Join("assets", "att2"))
 	if *counts.downloads != 1 {
 		t.Errorf("downloads = %d, want only the referenced attachment fetched", *counts.downloads)
 	}
@@ -1138,9 +1136,7 @@ func TestReadMarkdownCountsAnAttachmentWithNoUsablePathUnchecked(t *testing.T) {
 			if *counts.downloads != 0 {
 				t.Errorf("downloads = %d, want nothing fetched", *counts.downloads)
 			}
-			if _, err := os.Lstat("assets"); !os.IsNotExist(err) {
-				t.Errorf("Lstat(assets) error = %v, want nothing written", err)
-			}
+			assertGone(t, "assets")
 		})
 	}
 }

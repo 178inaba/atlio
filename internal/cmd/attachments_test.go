@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json/v2"
 	"errors"
@@ -51,10 +50,9 @@ func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.Handler
 }
 
 // pageAttachmentsAPI answers one page's listing with the given attachments and
-// counts the downloads. A download that names a version is answered with
-// attachmentBytes, and one that does not with pngBytes: the download commands
-// fetch the listing's downloadLink, and `confluence read --attachments` pins
-// the version it listed.
+// every download with attachmentBytes for the version it names, counting the
+// downloads. A download that names no version fails the test: it would fetch
+// whatever is latest rather than what the listing described.
 //
 // Both paths are matched exactly, so a request the command should not be
 // making at all fails the test rather than being quietly answered. The
@@ -92,12 +90,14 @@ func pageAttachmentsAPI(t *testing.T, pageID string, attachments ...attachment) 
 			_, _ = w.Write(payload)
 		case strings.HasPrefix(r.URL.Path, downloadBase) && strings.HasSuffix(r.URL.Path, "/download"):
 			downloads++
-			if version := r.URL.Query().Get("version"); version != "" {
-				id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, downloadBase), "/download")
-				_, _ = w.Write(attachmentBytes(id, version))
+			version := r.URL.Query().Get("version")
+			if version == "" {
+				t.Errorf("download of %s names no version", r.URL.Path)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			_, _ = w.Write(pngBytes)
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, downloadBase), "/download")
+			_, _ = w.Write(attachmentBytes(id, version))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -262,16 +262,10 @@ func TestAttachmentsDownloadWritesMatchingFilesUnchanged(t *testing.T) {
 		t.Fatalf("attachments download error = %v", err)
 	}
 
-	for _, name := range []string{"screenshot.png", "diagram.png"} {
-		got, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", name, err)
-		}
-		if !bytes.Equal(got, pngBytes) {
-			t.Errorf("%s = %v, want the served bytes verbatim %v", name, got, pngBytes)
-		}
-		if !strings.Contains(run.stdout, name) {
-			t.Errorf("output = %q, want it to name %s", run.stdout, name)
+	for _, f := range []struct{ name, id string }{{"screenshot.png", "att1"}, {"diagram.png", "att2"}} {
+		assertFileBytes(t, filepath.Join(dir, f.name), attachmentBytes(f.id, "1"))
+		if !strings.Contains(run.stdout, f.name) {
+			t.Errorf("output = %q, want it to name %s", run.stdout, f.name)
 		}
 	}
 	// The PDF matched nothing, so it must not have been fetched: the whole
@@ -310,8 +304,9 @@ func TestAttachmentsDownloadJSONOutput(t *testing.T) {
 		t.Fatalf("downloaded_attachments = %+v, want the single file", got.Downloaded)
 	}
 	want := filepath.Join(dir, "screenshot.png")
-	if d := got.Downloaded[0]; d.Filename != "screenshot.png" || d.Path != want || d.Bytes != int64(len(pngBytes)) {
-		t.Errorf("downloaded = %+v, want screenshot.png at %s with %d bytes", d, want, len(pngBytes))
+	wantBytes := int64(len(attachmentBytes("att1", "1")))
+	if d := got.Downloaded[0]; d.Filename != "screenshot.png" || d.Path != want || d.Bytes != wantBytes {
+		t.Errorf("downloaded = %+v, want screenshot.png at %s with %d bytes", d, want, wantBytes)
 	}
 }
 
@@ -1130,16 +1125,13 @@ func TestAttachmentsDownloadAcceptsASpaceOverviewURL(t *testing.T) {
 // every download to serve, so a test controls what the transfer does.
 func confluenceDownloadAPI(t *testing.T, title string, serve http.HandlerFunc) http.HandlerFunc {
 	t.Helper()
+	_, serveListing := attachmentsAPI(t, attachment{title: title, mediaType: "image/png", size: len(pngBytes)})
 	return func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/attachments"):
-			_, _ = fmt.Fprintf(w, `{"results":[{"id":"att1","title":%q,"mediaType":"image/png","fileSize":11,`+
-				`"version":{"number":1},"downloadLink":"/rest/api/content/123456/child/attachment/att1/download"}],"_links":{}}`, title)
-		case strings.HasSuffix(r.URL.Path, "/download"):
+		if strings.HasSuffix(r.URL.Path, "/download") {
 			serve(w, r)
-		default:
-			t.Errorf("unexpected request to %s", r.URL.Path)
+			return
 		}
+		serveListing(w, r)
 	}
 }
 
@@ -1202,13 +1194,7 @@ func TestAttachmentsDownloadKeepsAFileThatAppearsDuringTheTransfer(t *testing.T)
 	if !strings.Contains(err.Error(), dest) {
 		t.Errorf("error = %q, want it to name %s", err, dest)
 	}
-	got, readErr := os.ReadFile(dest)
-	if readErr != nil {
-		t.Fatalf("ReadFile() error = %v", readErr)
-	}
-	if string(got) != "theirs" {
-		t.Errorf("screenshot.png = %q, want the file that appeared left as it was", got)
-	}
+	assertFileBytes(t, dest, []byte("theirs"))
 	entries, readDirErr := os.ReadDir(dir)
 	if readDirErr != nil {
 		t.Fatalf("ReadDir() error = %v", readDirErr)

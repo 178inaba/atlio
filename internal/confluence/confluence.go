@@ -468,6 +468,16 @@ func (c *Client) PageAttachments(ctx context.Context, pageID string, limit int) 
 	return paginate[Attachment](ctx, c, path, nil, limit, nil)
 }
 
+// AllPageAttachments lists every file attached to a page, following the
+// listing to its end, for a caller whose answer would be wrong rather than
+// merely short if an attachment were left unread. The caller's deadline is
+// what bounds it.
+func (c *Client) AllPageAttachments(ctx context.Context, pageID string) ([]Attachment, error) {
+	path := "/api/v2/pages/" + url.PathEscape(pageID) + "/attachments"
+	all, _, err := paginate[Attachment](ctx, c, path, nil, 0, nil)
+	return all, err
+}
+
 // DownloadAttachment streams the bytes behind downloadLink to w and returns
 // how many it wrote. Errors name downloadLink as the API returned it.
 //
@@ -500,7 +510,8 @@ type UploadedAttachment struct {
 }
 
 // ErrUploadRefused marks a 400 to an upload that does not replace, which is
-// how Confluence refuses a name the page already has an attachment under. It
+// how Confluence refuses a name the page already has an attachment under
+// exactly; a name differing only in case it takes as a new version. It
 // is worded as a possibility because a 400 is not only that: the server's own
 // message, which the error carries too, is what names the cause.
 var ErrUploadRefused = errors.New("the page may already have an attachment with one of these names")
@@ -531,8 +542,9 @@ type uploadedAttachment struct {
 //
 // This is v1: v2 has no upload. Without replace the request is a POST, which
 // Confluence refuses as a whole — creating none of the files — when the page
-// already has an attachment named like one of them; with replace it is a PUT,
-// which adds a version to such an attachment and creates the rest.
+// already has an attachment named exactly like one of them, but takes a name
+// differing only in case as a new version of that attachment; with replace it
+// is a PUT, which adds a version to such an attachment and creates the rest.
 //
 // Each file part is followed by a minorEdit field of true. The API requires
 // the field either never or once per file, and true keeps the upload from
@@ -682,14 +694,19 @@ type multiEntityResult[T any] struct {
 // paginate walks a v2 cursor-paginated endpoint until limit items pass the
 // keep predicate (nil keeps everything) or the server runs out of pages.
 // The bool reports whether more items remain beyond what was returned;
-// v2 gives no total count, so that is all a caller can say.
+// v2 gives no total count, so that is all a caller can say. A limit of zero or
+// less sets no cap: every page is read, and the bool is always false.
 func paginate[T any](ctx context.Context, c *Client, path string, query url.Values, limit int, keep func(T) bool) ([]T, bool, error) {
 	var all []T
 	cursor := ""
 	for {
 		// One past the caller's limit, so a full page proves more exist.
+		size := maxPageSize
+		if limit > 0 {
+			size = min(limit-len(all)+1, maxPageSize)
+		}
 		page := cloneValues(query)
-		page.Set("limit", strconv.Itoa(min(limit-len(all)+1, maxPageSize)))
+		page.Set("limit", strconv.Itoa(size))
 		if cursor != "" {
 			page.Set("cursor", cursor)
 		}
@@ -703,7 +720,7 @@ func paginate[T any](ctx context.Context, c *Client, path string, query url.Valu
 			if keep != nil && !keep(item) {
 				continue
 			}
-			if len(all) == limit {
+			if limit > 0 && len(all) == limit {
 				// One kept item past the limit is enough to report that
 				// more exist, without a count the API cannot give.
 				return all, true, nil

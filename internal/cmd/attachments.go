@@ -309,6 +309,24 @@ func runAttachmentsUpload(cmd *cobra.Command, args []string, g *globalFlags, rep
 		return err
 	}
 
+	// Confluence refuses only an exact match and takes a name differing in
+	// case as a new version of the existing attachment, so the refusal
+	// --replace promises is made here. An attachment added between this
+	// listing and the upload is not caught — the API has no conditional
+	// create — and an exact match among those is still refused by the 400
+	// below.
+	if !replace {
+		existing, err := client.AllPageAttachments(ctx, pageID)
+		if err != nil {
+			return fmt.Errorf("list the page's attachments: %w", err)
+		}
+		if conflicts := existingNameConflicts(opened, existing); len(conflicts) > 0 {
+			return fmt.Errorf("cannot upload (nothing was sent): %s; "+
+				"pass --replace to upload a new version of that attachment instead",
+				strings.Join(conflicts, "; "))
+		}
+	}
+
 	files := make([]confluence.UploadFile, 0, len(opened))
 	for _, f := range opened {
 		files = append(files, confluence.UploadFile{Name: filepath.Base(f.Name()), Content: f})
@@ -332,6 +350,28 @@ func runAttachmentsUpload(cmd *cobra.Command, args []string, g *globalFlags, rep
 	return writeList(cmd, outFormat, "uploaded attachments", items, "")
 }
 
+// existingNameConflicts describes each file whose base name the page already
+// has an attachment under, compared as localFileKey compares names. That is
+// wider than the ASCII case Confluence has been seen to merge, deliberately:
+// refusing a name Confluence would keep apart costs a --replace, while
+// letting one through it would merge adds a version to an existing file.
+func existingNameConflicts(files []*os.File, attachments []confluence.Attachment) []string {
+	byKey := map[string][]string{}
+	for _, a := range attachments {
+		key := localFileKey(a.Title)
+		byKey[key] = append(byKey[key], a.Title)
+	}
+
+	var conflicts []string
+	for _, f := range files {
+		if titles := byKey[localFileKey(filepath.Base(f.Name()))]; len(titles) > 0 {
+			conflicts = append(conflicts, fmt.Sprintf("%s matches the page's attachment %s",
+				f.Name(), strings.Join(titles, ", ")))
+		}
+	}
+	return conflicts
+}
+
 // openUploads opens every file to upload, attached under its base name, and
 // refuses the whole run — naming every offending argument — if any cannot be
 // read or two would be the same attachment.
@@ -352,10 +392,13 @@ func openUploads(paths []string) ([]*os.File, error) {
 		files    []*os.File
 		problems []string
 	)
-	byName := map[string][]string{}
+	// Keyed as existingNameConflicts compares, since Confluence would take
+	// base names differing only in case as one attachment.
+	byKey := map[string][]string{}
+	key := func(p string) string { return localFileKey(filepath.Base(p)) }
 
 	for _, p := range paths {
-		byName[filepath.Base(p)] = append(byName[filepath.Base(p)], p)
+		byKey[key(p)] = append(byKey[key(p)], p)
 
 		f, problem := openRegular(p)
 		if problem != "" {
@@ -369,11 +412,10 @@ func openUploads(paths []string) ([]*os.File, error) {
 	// Each name is dropped once reported, which is what keeps one path given
 	// twice from being reported twice.
 	for _, p := range paths {
-		name := filepath.Base(p)
-		if same := byName[name]; len(same) > 1 {
-			problems = append(problems, fmt.Sprintf("%s would all be attached as %s",
-				strings.Join(same, ", "), name))
-			delete(byName, name)
+		if same := byKey[key(p)]; len(same) > 1 {
+			problems = append(problems, fmt.Sprintf("%s would all be attached as one attachment",
+				strings.Join(same, ", ")))
+			delete(byKey, key(p))
 		}
 	}
 
@@ -506,7 +548,8 @@ func isPlainFilename(name string) bool {
 // APFS does. It is Unicode's canonical caseless matching, NFD(fold(NFD(name))),
 // whose inner NFD is what lets a decomposed spelling fold like a composed one.
 // The answer is the same on every platform, so a page or issue downloads the
-// same files everywhere.
+// same files everywhere. Uploads compare attachment names with it too, as a
+// superset of the case-insensitive matching Confluence applies to them.
 func localFileKey(name string) string {
 	return norm.NFD.String(cases.Fold().String(norm.NFD.String(name)))
 }

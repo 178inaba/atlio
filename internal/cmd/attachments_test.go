@@ -701,6 +701,37 @@ func TestAttachmentsUploadRefusesANameThePageHasIgnoringCase(t *testing.T) {
 	}
 }
 
+func TestAttachmentsUploadRefusesTheWholeRunNamingEveryMatch(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	requests, upload := uploadAPI(t)
+	_, handler := withAttachmentListing(t, [][]string{{"a.png", "c.png"}}, upload)
+	startAPI(t, handler)
+
+	free := writeTempFile(t, "b.png", string(pngBytes))
+	first := writeTempFile(t, "A.png", string(pngBytes))
+	second := writeTempFile(t, "C.png", string(pngBytes))
+
+	_, err := runCLI(t, "confluence", "attachments", "upload", testPageURL, free, first, second)
+	if err == nil {
+		t.Fatal("attachments upload error = nil, want the run refused")
+	}
+	for _, want := range []string{
+		first + " matches the page's attachment a.png",
+		second + " matches the page's attachment c.png",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q in it", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), free) {
+		t.Errorf("error = %q, want %s, which matches nothing, left unnamed", err, free)
+	}
+	if len(*requests) != 0 {
+		t.Errorf("uploads = %d, want none — not even %s", len(*requests), free)
+	}
+}
+
 func TestAttachmentsUploadSendsANameThePageDoesNotHave(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)

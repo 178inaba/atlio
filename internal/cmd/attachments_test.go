@@ -331,23 +331,20 @@ func TestAttachmentsDownloadDefaultsToTheWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestAttachmentsDownloadTakesTheDirectoryAsDir(t *testing.T) {
-	for _, flag := range []string{"-D", "--dir"} {
-		t.Run(flag, func(t *testing.T) {
-			isolateConfig(t)
-			seedProfile(t, "example", testSite)
-			_, handler := attachmentsAPI(t, attachment{title: "screenshot.png", mediaType: "image/png", size: len(pngBytes)})
-			startAPI(t, handler)
+// Every other download test passes --dir, so this one covers the shorthand.
+func TestAttachmentsDownloadTakesTheDirectoryAsD(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := attachmentsAPI(t, attachment{title: "screenshot.png", mediaType: "image/png", size: len(pngBytes)})
+	startAPI(t, handler)
 
-			dir := filepath.Join(t.TempDir(), "assets")
-			if _, err := runCLI(t, "confluence", "attachments", "download", testPageURL,
-				"--pattern", "*.png", flag, dir); err != nil {
-				t.Fatalf("attachments download %s error = %v", flag, err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "screenshot.png")); err != nil {
-				t.Errorf("Stat(screenshot.png) error = %v, want the file in %s", err, dir)
-			}
-		})
+	dir := filepath.Join(t.TempDir(), "assets")
+	if _, err := runCLI(t, "confluence", "attachments", "download", testPageURL,
+		"--pattern", "*.png", "-D", dir); err != nil {
+		t.Fatalf("attachments download -D error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "screenshot.png")); err != nil {
+		t.Errorf("Stat(screenshot.png) error = %v, want the file in %s", err, dir)
 	}
 }
 
@@ -372,9 +369,7 @@ func TestAttachmentsDownloadRejectsOutput(t *testing.T) {
 			if *downloads != 0 {
 				t.Errorf("downloads = %d, want 0", *downloads)
 			}
-			if _, err := os.Stat(dir); !os.IsNotExist(err) {
-				t.Errorf("Stat(%s) error = %v, want nothing written", dir, err)
-			}
+			assertGone(t, dir)
 		})
 	}
 }
@@ -394,15 +389,15 @@ func TestAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *testing.
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := runDownload(t, dir, "*.png"); err == nil {
+	_, err := runDownload(t, dir, "*.png")
+	if err == nil {
 		t.Fatal("attachments download error = nil, want a refusal to overwrite")
-	} else {
-		if !strings.Contains(err.Error(), "screenshot.png") {
-			t.Errorf("error = %q, want it to name the colliding file", err)
-		}
-		if !strings.Contains(err.Error(), "--dir") {
-			t.Errorf("error = %q, want it to point at --dir", err)
-		}
+	}
+	if !strings.Contains(err.Error(), "screenshot.png") {
+		t.Errorf("error = %q, want it to name the colliding file", err)
+	}
+	if !strings.Contains(err.Error(), "--dir") {
+		t.Errorf("error = %q, want it to point at --dir", err)
 	}
 	got, readErr := os.ReadFile(existing)
 	if readErr != nil {

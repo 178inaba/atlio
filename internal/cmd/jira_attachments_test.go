@@ -288,22 +288,19 @@ func TestJiraAttachmentsDownloadRequiresThePatternFlag(t *testing.T) {
 	}
 }
 
-func TestJiraAttachmentsDownloadTakesTheDirectoryAsDir(t *testing.T) {
-	for _, flag := range []string{"-D", "--dir"} {
-		t.Run(flag, func(t *testing.T) {
-			isolateConfig(t)
-			seedProfile(t, "example", testSite)
-			_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
-			startAPI(t, handler)
+// Every other download test passes --dir, so this one covers the shorthand.
+func TestJiraAttachmentsDownloadTakesTheDirectoryAsD(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+	startAPI(t, handler)
 
-			dir := filepath.Join(t.TempDir(), "assets")
-			if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", flag, dir); err != nil {
-				t.Fatalf("jira attachments download %s error = %v", flag, err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
-				t.Errorf("Stat(screen.png) error = %v, want the file in %s", err, dir)
-			}
-		})
+	dir := filepath.Join(t.TempDir(), "assets")
+	if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", "-D", dir); err != nil {
+		t.Fatalf("jira attachments download -D error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
+		t.Errorf("Stat(screen.png) error = %v, want the file in %s", err, dir)
 	}
 }
 
@@ -345,9 +342,7 @@ func TestJiraAttachmentsDownloadRejectsOutput(t *testing.T) {
 			if len(*content) != 0 {
 				t.Errorf("content requests = %v, want none", *content)
 			}
-			if _, err := os.Stat(dir); !os.IsNotExist(err) {
-				t.Errorf("Stat(%s) error = %v, want nothing written", dir, err)
-			}
+			assertGone(t, dir)
 		})
 	}
 }
@@ -367,15 +362,15 @@ func TestJiraAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *test
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := runJiraDownload(t, dir, "*.png"); err == nil {
+	_, err := runJiraDownload(t, dir, "*.png")
+	if err == nil {
 		t.Fatal("jira attachments download error = nil, want a refusal to overwrite")
-	} else {
-		if !strings.Contains(err.Error(), existing) {
-			t.Errorf("error = %q, want it to name %s", err, existing)
-		}
-		if !strings.Contains(err.Error(), "--dir") {
-			t.Errorf("error = %q, want it to point at --dir", err)
-		}
+	}
+	if !strings.Contains(err.Error(), existing) {
+		t.Errorf("error = %q, want it to name %s", err, existing)
+	}
+	if !strings.Contains(err.Error(), "--dir") {
+		t.Errorf("error = %q, want it to point at --dir", err)
 	}
 	if got, err := os.ReadFile(existing); err != nil || string(got) != "mine" {
 		t.Errorf("screen.png = %q (error %v), want it untouched", got, err)

@@ -95,15 +95,7 @@ are one file on a case-insensitive filesystem), on every platform.`,
 		},
 	}
 
-	// No backticks in flag usage strings: cobra reads the first backtick
-	// pair as the flag's argument placeholder.
-	cmd.Flags().StringVar(&pattern, "pattern", "",
-		"filename glob selecting which attachments to download, e.g. *.png")
-	cmd.Flags().StringVarP(&outDir, "dir", "D", ".",
-		"directory to write the downloaded files to, created if it does not exist")
-	if err := cmd.MarkFlagRequired("pattern"); err != nil {
-		panic(err)
-	}
+	addDownloadFlags(cmd, &pattern, &outDir)
 	addFormatFlag(cmd, &outFormat)
 
 	return cmd
@@ -587,6 +579,21 @@ func collidingGroups(items []string, key func(string) string) [][]string {
 		}
 	}
 	return groups
+}
+
+// addDownloadFlags registers the flags both download commands take, so the
+// two keep one contract and the flag planDownloads' refusal names exists on
+// each.
+func addDownloadFlags(cmd *cobra.Command, pattern, dir *string) {
+	// No backticks in flag usage strings: cobra reads the first backtick
+	// pair as the flag's argument placeholder.
+	cmd.Flags().StringVar(pattern, "pattern", "",
+		"filename glob selecting which attachments to download, e.g. *.png")
+	cmd.Flags().StringVarP(dir, "dir", "D", ".",
+		"directory to write the downloaded files to, created if it does not exist")
+	if err := cmd.MarkFlagRequired("pattern"); err != nil {
+		panic(err)
+	}
 }
 
 // planDownloads resolves where each matched attachment will be written, and

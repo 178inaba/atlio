@@ -240,11 +240,11 @@ func TestAttachmentsListRejectsAnOutOfRangeLimit(t *testing.T) {
 	}
 }
 
-// runDownload runs `confluence attachments download` with --pattern and -o set.
+// runDownload runs `confluence attachments download` with --pattern and --dir set.
 func runDownload(t *testing.T, dir, pattern string, extra ...string) (cliRun, error) {
 	t.Helper()
 
-	args := append([]string{"confluence", "attachments", "download", testPageURL, "--pattern", pattern, "-o", dir}, extra...)
+	args := append([]string{"confluence", "attachments", "download", testPageURL, "--pattern", pattern, "--dir", dir}, extra...)
 	return runCLI(t, args...)
 }
 
@@ -258,7 +258,7 @@ func TestAttachmentsDownloadWritesMatchingFilesUnchanged(t *testing.T) {
 	)
 	startAPI(t, handler)
 
-	// A directory that does not exist yet, so `-o ./assets` works without the
+	// A directory that does not exist yet, so `--dir ./assets` works without the
 	// caller having to make it first.
 	dir := filepath.Join(t.TempDir(), "assets")
 	run, err := runDownload(t, dir, "*.png")
@@ -331,6 +331,54 @@ func TestAttachmentsDownloadDefaultsToTheWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestAttachmentsDownloadTakesTheDirectoryAsDir(t *testing.T) {
+	for _, flag := range []string{"-D", "--dir"} {
+		t.Run(flag, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			_, handler := attachmentsAPI(t, attachment{title: "screenshot.png", mediaType: "image/png", size: len(pngBytes)})
+			startAPI(t, handler)
+
+			dir := filepath.Join(t.TempDir(), "assets")
+			if _, err := runCLI(t, "confluence", "attachments", "download", testPageURL,
+				"--pattern", "*.png", flag, dir); err != nil {
+				t.Fatalf("attachments download %s error = %v", flag, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "screenshot.png")); err != nil {
+				t.Errorf("Stat(screenshot.png) error = %v, want the file in %s", err, dir)
+			}
+		})
+	}
+}
+
+// -o names a file everywhere else in atlio, so the download commands take no
+// -o at all rather than one meaning a directory.
+func TestAttachmentsDownloadRejectsOutput(t *testing.T) {
+	for _, flag := range []string{"-o", "--output"} {
+		t.Run(flag, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			downloads, handler := attachmentsAPI(t, attachment{title: "screenshot.png", mediaType: "image/png", size: len(pngBytes)})
+			startAPI(t, handler)
+
+			dir := filepath.Join(t.TempDir(), "assets")
+			_, err := runCLI(t, "confluence", "attachments", "download", testPageURL, "--pattern", "*.png", flag, dir)
+			if err == nil {
+				t.Fatalf("attachments download %s error = nil, want an unknown flag", flag)
+			}
+			if code, _ := describeFailure(err, time.Minute); code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if *downloads != 0 {
+				t.Errorf("downloads = %d, want 0", *downloads)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("Stat(%s) error = %v, want nothing written", dir, err)
+			}
+		})
+	}
+}
+
 func TestAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
@@ -348,8 +396,13 @@ func TestAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *testing.
 
 	if _, err := runDownload(t, dir, "*.png"); err == nil {
 		t.Fatal("attachments download error = nil, want a refusal to overwrite")
-	} else if !strings.Contains(err.Error(), "screenshot.png") {
-		t.Errorf("error = %q, want it to name the colliding file", err)
+	} else {
+		if !strings.Contains(err.Error(), "screenshot.png") {
+			t.Errorf("error = %q, want it to name the colliding file", err)
+		}
+		if !strings.Contains(err.Error(), "--dir") {
+			t.Errorf("error = %q, want it to point at --dir", err)
+		}
 	}
 	got, readErr := os.ReadFile(existing)
 	if readErr != nil {
@@ -414,7 +467,7 @@ func TestAttachmentsDownloadRefusesAttachmentsThatWouldBeOneFile(t *testing.T) {
 				t.Errorf("downloads = %d, want 0 requests once a collision is known", *downloads)
 			}
 			if _, err := os.Stat(dir); !os.IsNotExist(err) {
-				t.Errorf("Stat(-o) error = %v, want nothing written, not even the directory", err)
+				t.Errorf("Stat(--dir) error = %v, want nothing written, not even the directory", err)
 			}
 		})
 	}
@@ -478,7 +531,7 @@ func TestAttachmentsDownloadRejectsAMalformedPattern(t *testing.T) {
 func TestAttachmentsDownloadRejectsAFilenameThatEscapesTheOutputDirectory(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
-	// The title is server data. A path in it would put the write outside -o.
+	// The title is server data. A path in it would put the write outside --dir.
 	downloads, handler := attachmentsAPI(t, attachment{title: "../escaped", mediaType: "text/plain", size: 1})
 	startAPI(t, handler)
 
@@ -489,14 +542,14 @@ func TestAttachmentsDownloadRejectsAFilenameThatEscapesTheOutputDirectory(t *tes
 	// which is also why a title like this is unreachable via a plain "*".
 	_, err := runDownload(t, dir, "*/escaped")
 	if err == nil {
-		t.Fatal("attachments download error = nil, want a filename outside -o refused")
+		t.Fatal("attachments download error = nil, want a filename outside --dir refused")
 	}
 	if !strings.Contains(err.Error(), "not a plain filename") {
 		t.Fatalf("error = %q, want the path guard to reject it (not a no-match)", err)
 	}
 
 	if _, statErr := os.Stat(filepath.Join(dir, "..", "escaped")); !os.IsNotExist(statErr) {
-		t.Errorf("Stat(../escaped) error = %v, want nothing written outside -o", statErr)
+		t.Errorf("Stat(../escaped) error = %v, want nothing written outside --dir", statErr)
 	}
 	if *downloads != 0 {
 		t.Errorf("downloads = %d, want the guard to refuse before any transfer", *downloads)
@@ -1117,7 +1170,7 @@ func TestAttachmentsDownloadAcceptsASpaceOverviewURL(t *testing.T) {
 	startAPI(t, withSpaceLookup(t, handler))
 
 	if _, err := runCLI(t, "confluence", "attachments", "download", testSpaceOverviewURL,
-		"--pattern", "*.png", "-o", t.TempDir()); err != nil {
+		"--pattern", "*.png", "--dir", t.TempDir()); err != nil {
 		t.Fatalf("attachments download error = %v", err)
 	}
 	if *downloads != 1 {

@@ -99,7 +99,7 @@ are one file on a case-insensitive filesystem), on every platform.`,
 	// pair as the flag's argument placeholder.
 	cmd.Flags().StringVar(&pattern, "pattern", "",
 		"filename glob selecting which attachments to download, e.g. *.png")
-	cmd.Flags().StringVarP(&outDir, "output", "o", ".",
+	cmd.Flags().StringVarP(&outDir, "dir", "D", ".",
 		"directory to write the downloaded files to, created if it does not exist")
 	if err := cmd.MarkFlagRequired("pattern"); err != nil {
 		panic(err)
@@ -634,7 +634,7 @@ func planDownloads(matched []attachmentFile, outDir string) ([]plannedDownload, 
 	}
 
 	if len(collisions) > 0 {
-		return nil, fmt.Errorf("refusing to overwrite %s; delete them or pass a different -o "+
+		return nil, fmt.Errorf("refusing to overwrite %s; delete them or pass a different --dir "+
 			"(nothing was downloaded)", strings.Join(collisions, ", "))
 	}
 	return planned, nil

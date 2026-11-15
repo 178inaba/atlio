@@ -106,7 +106,7 @@ atlio confluence read 123456 --markdown --attachments ./assets
 
 # ...or reach for an attachment the body does not reference
 atlio confluence attachments list 123456
-atlio confluence attachments download 123456 --pattern '*.png' -o ./assets
+atlio confluence attachments download 123456 --pattern '*.png' --dir ./assets
 
 # Put a screenshot on the page: attach it, then reference it from the body
 atlio confluence attachments upload 123456 ./shot.png
@@ -136,7 +136,7 @@ atlio jira comments list KAN-1
 
 # ...and see the screenshots attached to it
 atlio jira attachments list KAN-1
-atlio jira attachments download KAN-1 --pattern '*.png' -o ./assets
+atlio jira attachments download KAN-1 --pattern '*.png' --dir ./assets
 ```
 
 Commands that address a page accept the URL as copied from the browser, the short link the Share
@@ -288,7 +288,7 @@ filename, media type and size, so you can tell a 10 KB screenshot from a 4 MB PD
 either. `confluence attachments download` then writes the ones whose filename matches a glob:
 
 ```sh
-atlio confluence attachments download 123456 --pattern '*.png' -o ./assets
+atlio confluence attachments download 123456 --pattern '*.png' --dir ./assets
 ```
 
 The bytes are the response body written through unchanged, so a downloaded image opens as the image
@@ -300,7 +300,7 @@ case-sensitive, and matching nothing is an error rather than a silent success.
 
 An existing file is never replaced. If any matching attachment would overwrite one, the command
 fails before downloading anything and names the file, so a run can never leave some files replaced
-and others not — delete them, or point `-o` somewhere else. `-o` defaults to the working directory
+and others not — delete them, or point `--dir` somewhere else. `--dir` defaults to the working directory
 and is created if it does not exist.
 
 Each file is downloaded to a hidden temporary file (`.atlio-*.tmp`) in the same directory and moved
@@ -495,7 +495,7 @@ filename, media type and size; Jira returns them all at once, so there is no `--
 `jira attachments download` writes the ones whose filename matches a glob:
 
 ```sh
-atlio jira attachments download KAN-1 --pattern '*.png' -o ./assets
+atlio jira attachments download KAN-1 --pattern '*.png' --dir ./assets
 ```
 
 The contract is `confluence attachments download`'s: `--pattern` is **required** and
@@ -503,7 +503,7 @@ case-sensitive (`--pattern '*'` is the only "download everything"), matching not
 that says how many attachments the issue has, an existing file is never replaced — the command
 fails before downloading anything and names it — each file goes through a hidden `.atlio-*.tmp`
 file the same way, so an interrupted download leaves no partial file under an attachment's name
-except on a filesystem that cannot rename without replacing, and `-o` defaults to the working
+except on a filesystem that cannot rename without replacing, and `--dir` defaults to the working
 directory and is created if it does not exist.
 
 Jira lets two attachments on one issue share a filename, and `--pattern` cannot pick one of them.

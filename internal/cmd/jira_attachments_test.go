@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/178inaba/atlio/v2/internal/atlassian"
 	"github.com/178inaba/atlio/v2/internal/jira"
@@ -81,7 +82,7 @@ func jiraAttachmentsAPI(t *testing.T, attachments ...jiraAttachment) (*[]string,
 func runJiraDownload(t *testing.T, dir, pattern string, extra ...string) (cliRun, error) {
 	t.Helper()
 
-	args := append([]string{"jira", "attachments", "download", "KAN-1", "--pattern", pattern, "-o", dir}, extra...)
+	args := append([]string{"jira", "attachments", "download", "KAN-1", "--pattern", pattern, "--dir", dir}, extra...)
 	return runCLI(t, args...)
 }
 
@@ -287,6 +288,70 @@ func TestJiraAttachmentsDownloadRequiresThePatternFlag(t *testing.T) {
 	}
 }
 
+func TestJiraAttachmentsDownloadTakesTheDirectoryAsDir(t *testing.T) {
+	for _, flag := range []string{"-D", "--dir"} {
+		t.Run(flag, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+			startAPI(t, handler)
+
+			dir := filepath.Join(t.TempDir(), "assets")
+			if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", flag, dir); err != nil {
+				t.Fatalf("jira attachments download %s error = %v", flag, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
+				t.Errorf("Stat(screen.png) error = %v, want the file in %s", err, dir)
+			}
+		})
+	}
+}
+
+func TestJiraAttachmentsDownloadDefaultsToTheWorkingDirectory(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+	startAPI(t, handler)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png"); err != nil {
+		t.Fatalf("jira attachments download error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "screen.png")); err != nil {
+		t.Errorf("Stat(screen.png) error = %v, want the file in the working directory", err)
+	}
+}
+
+// -o names a file everywhere else in atlio, so the download commands take no
+// -o at all rather than one meaning a directory.
+func TestJiraAttachmentsDownloadRejectsOutput(t *testing.T) {
+	for _, flag := range []string{"-o", "--output"} {
+		t.Run(flag, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			content, handler := jiraAttachmentsAPI(t, jiraAttachment{filename: "screen.png", mimeType: "image/png", size: len(pngBytes)})
+			startAPI(t, handler)
+
+			dir := filepath.Join(t.TempDir(), "assets")
+			_, err := runCLI(t, "jira", "attachments", "download", "KAN-1", "--pattern", "*.png", flag, dir)
+			if err == nil {
+				t.Fatalf("jira attachments download %s error = nil, want an unknown flag", flag)
+			}
+			if code, _ := describeFailure(err, time.Minute); code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if len(*content) != 0 {
+				t.Errorf("content requests = %v, want none", *content)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("Stat(%s) error = %v, want nothing written", dir, err)
+			}
+		})
+	}
+}
+
 func TestJiraAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
@@ -304,8 +369,13 @@ func TestJiraAttachmentsDownloadRefusesToOverwriteBeforeFetchingAnything(t *test
 
 	if _, err := runJiraDownload(t, dir, "*.png"); err == nil {
 		t.Fatal("jira attachments download error = nil, want a refusal to overwrite")
-	} else if !strings.Contains(err.Error(), existing) {
-		t.Errorf("error = %q, want it to name %s", err, existing)
+	} else {
+		if !strings.Contains(err.Error(), existing) {
+			t.Errorf("error = %q, want it to name %s", err, existing)
+		}
+		if !strings.Contains(err.Error(), "--dir") {
+			t.Errorf("error = %q, want it to point at --dir", err)
+		}
 	}
 	if got, err := os.ReadFile(existing); err != nil || string(got) != "mine" {
 		t.Errorf("screen.png = %q (error %v), want it untouched", got, err)
@@ -416,7 +486,7 @@ func TestJiraAttachmentsDownloadRefusesANameWithAnIDThatStillCollides(t *testing
 		t.Errorf("content requests = %v, want none", *content)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("Stat(-o) error = %v, want nothing written, not even the directory", err)
+		t.Errorf("Stat(--dir) error = %v, want nothing written, not even the directory", err)
 	}
 }
 

@@ -10,7 +10,7 @@
 - You need to see how a page fits in the tree, or what people said on it → `atlio confluence children <page>` and `atlio confluence comments list <page>`.
 - The user asks you to leave a note or a question on a page → write it to a file as storage XHTML, then `atlio confluence comments create <page> -f <file>`.
 - The task needs the images a page shows → add `--attachments <dir>` to the `confluence read --markdown` above; the body links the files it downloaded, so read those paths.
-- The task needs a file the body does not show as an image → `atlio confluence attachments list <page>`, then `atlio confluence attachments download <page> --pattern '<glob>' -o <dir>` and read the downloaded file.
+- The task needs a file the body does not show as an image → `atlio confluence attachments list <page>`, then `atlio confluence attachments download <page> --pattern '<glob>' --dir <dir>` and read the downloaded file.
 - The task needs to put an image on a page (a screenshot you took, a chart you rendered) → `atlio confluence attachments upload <page> <image>`, then `atlio confluence read <url> -o <file>`, add `<ac:image><ri:attachment ri:filename="<image's base name>" /></ac:image>` to the file where it belongs, and `atlio confluence update -f <file>`.
 - The user asks you to change a PlantUML diagram on a page, or to put a new one on it → `atlio confluence plantuml` (`list`, `get`, `set`, `add`) on the file `confluence read` downloaded, then `atlio confluence update`.
 

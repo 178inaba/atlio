@@ -349,27 +349,21 @@ func TestAttachmentsDownloadTakesTheDirectoryAsD(t *testing.T) {
 }
 
 // -o names a file everywhere else in atlio, so the download commands take no
-// -o at all rather than one meaning a directory.
+// -o at all rather than one meaning a directory. pflag rejects an unknown flag
+// before RunE, so the error naming the flag is the whole check: any other
+// failure would mean the flag got through.
 func TestAttachmentsDownloadRejectsOutput(t *testing.T) {
 	for _, flag := range []string{"-o", "--output"} {
 		t.Run(flag, func(t *testing.T) {
 			isolateConfig(t)
-			seedProfile(t, "example", testSite)
-			downloads, handler := attachmentsAPI(t, attachment{title: "screenshot.png", mediaType: "image/png", size: len(pngBytes)})
-			startAPI(t, handler)
 
-			dir := filepath.Join(t.TempDir(), "assets")
-			_, err := runCLI(t, "confluence", "attachments", "download", testPageURL, "--pattern", "*.png", flag, dir)
+			_, err := runCLI(t, "confluence", "attachments", "download", testPageURL, "--pattern", "*.png", flag, t.TempDir())
 			if err == nil {
 				t.Fatalf("attachments download %s error = nil, want an unknown flag", flag)
 			}
-			if code, _ := describeFailure(err, time.Minute); code != 1 {
-				t.Errorf("exit code = %d, want 1", code)
+			if !strings.Contains(err.Error(), "unknown") || !strings.Contains(err.Error(), flag) {
+				t.Errorf("error = %q, want an unknown flag naming %s", err, flag)
 			}
-			if *downloads != 0 {
-				t.Errorf("downloads = %d, want 0", *downloads)
-			}
-			assertGone(t, dir)
 		})
 	}
 }

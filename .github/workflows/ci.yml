@@ -41,8 +41,9 @@ jobs:
         with:
           go-version-file: go.mod
       # Every download on Windows is published through MoveFileEx, which the
-      # cross-compile above only type-checks. These tests run it.
-      - run: go test ./internal/cmd -run "RenameNoReplace|PublishFile"
+      # cross-compile above only type-checks. These tests run it; -v shows a
+      # skip, which would mean the runner's filesystem has no such rename.
+      - run: go test -v ./internal/cmd -run "RenameNoReplace|PublishFile"
 
   lint:
     name: Lint

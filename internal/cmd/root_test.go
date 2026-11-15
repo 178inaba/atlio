@@ -97,7 +97,7 @@ func TestFormatFlagRegistration(t *testing.T) {
 		"profile use":                     false,
 	}
 
-	root, _ := newRootCmd(&globalFlags{})
+	root, _ := newRootCmd(&globalFlags{}, "")
 	got := make(map[string]bool, len(want))
 	walkCommands(root, func(name string, cmd *cobra.Command) {
 		got[name] = cmd.Flags().Lookup("format") != nil
@@ -114,7 +114,7 @@ func TestFormatFlagRegistration(t *testing.T) {
 // before the default was assigned would change the line without failing
 // anything else.
 func TestFormatFlagHelpLine(t *testing.T) {
-	root, _ := newRootCmd(&globalFlags{})
+	root, _ := newRootCmd(&globalFlags{}, "")
 	walkCommands(root, func(name string, cmd *cobra.Command) {
 		flag := cmd.Flags().Lookup("format")
 		if flag == nil {
@@ -697,18 +697,23 @@ func TestResolveVersion(t *testing.T) {
 	})
 }
 
-// TestVersionFlag pins that the resolved version reaches the root command:
+// TestVersionFlag pins that the version main embeds reaches --version:
 // resolveVersion could be correct and still be reported by nothing, since it is
 // the Version field being set that makes cobra register the flag at all.
 func TestVersionFlag(t *testing.T) {
-	run, err := runCLI(t, "--version")
-	if err != nil {
+	root, _ := newRootCmd(&globalFlags{}, "v1.2.3")
+	var out, errOut strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetArgs([]string{"--version"})
+
+	if err := root.ExecuteContext(t.Context()); err != nil {
 		t.Fatalf("atlio --version error = %v, want nil", err)
 	}
-	if want := "atlio version " + resolveVersion(version) + "\n"; run.stdout != want {
-		t.Errorf("atlio --version stdout = %q, want %q", run.stdout, want)
+	if want := "atlio version 1.2.3\n"; out.String() != want {
+		t.Errorf("atlio --version stdout = %q, want %q", out.String(), want)
 	}
-	if run.stderr != "" {
-		t.Errorf("atlio --version stderr = %q, want nothing", run.stderr)
+	if errOut.String() != "" {
+		t.Errorf("atlio --version stderr = %q, want nothing", errOut.String())
 	}
 }

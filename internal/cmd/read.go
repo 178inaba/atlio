@@ -48,7 +48,8 @@ another version never shares its path; a file already at that path is that
 same attachment version, and is kept and linked without being fetched again.
 An interrupted download leaves at most a hidden .atlio-*.tmp file, not a
 partial file at that path, except on a filesystem that cannot rename without
-replacing. An attachment it cannot fetch leaves the image rendered as its
+replacing, where a partial file left there is reused until deleted. An
+attachment it cannot fetch leaves the image rendered as its
 filename and is counted in Unchecked.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

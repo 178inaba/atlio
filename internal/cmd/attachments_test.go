@@ -27,10 +27,11 @@ var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0
 const attachmentsListPath = "/wiki/api/v2/pages/123456/attachments"
 
 // attachment is one entry of the listing a test serves. id defaults to
-// att<n>, n being its 1-based position, and version to 1; a negative version
-// leaves the field out of the listing.
+// att<n>, n being its 1-based position, and version to 1; noID and a negative
+// version leave the field out of the listing.
 type attachment struct {
 	id        string
+	noID      bool
 	title     string
 	mediaType string
 	size      int
@@ -79,6 +80,9 @@ func pageAttachmentsAPI(t *testing.T, pageID string, attachments ...attachment) 
 				}
 				if a.version >= 0 {
 					entry["version"] = map[string]any{"number": max(a.version, 1)}
+				}
+				if a.noID {
+					delete(entry, "id")
 				}
 				results = append(results, entry)
 			}
@@ -1137,9 +1141,20 @@ func confluenceDownloadAPI(t *testing.T, title string, serve http.HandlerFunc) h
 
 // serveTruncated declares more bytes than it sends, so the client sees the
 // connection end part-way through the body.
-func serveTruncated(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Length", "100")
-	_, _ = w.Write(pngBytes)
+//
+// Part-way through, it checks that nothing is at dest yet: the bytes in flight
+// belong in a temporary file, so a crash at this point would leave no
+// truncated file under the attachment's name.
+func serveTruncated(t *testing.T, dest string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write(pngBytes)
+		w.(http.Flusher).Flush()
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Errorf("Lstat(%s) mid-transfer error = %v, want nothing at the final path yet", dest, err)
+		}
+	}
 }
 
 // assertEmptyDir fails unless dir holds nothing: no final file and no
@@ -1162,9 +1177,9 @@ func assertEmptyDir(t *testing.T, dir string) {
 func TestAttachmentsDownloadLeavesNothingWhenATransferFailsPartWay(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
-	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", serveTruncated))
-
 	dir := t.TempDir()
+	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", serveTruncated(t, filepath.Join(dir, "screenshot.png"))))
+
 	if _, err := runDownload(t, dir, "*.png"); err == nil {
 		t.Fatal("attachments download error = nil, want the truncated transfer reported")
 	}

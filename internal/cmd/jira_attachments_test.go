@@ -457,15 +457,16 @@ func TestJiraAttachmentsDownloadLeavesNothingWhenATransferFailsPartWay(t *testin
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
 	_, serveIssue := jiraAttachmentsAPI(t, jiraAttachment{filename: "screenshot.png", mimeType: "image/png", size: 100})
+	dir := t.TempDir()
+	serveContent := serveTruncated(t, filepath.Join(dir, "screenshot.png"))
 	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, jiraContentBasePath) {
-			serveTruncated(w, r)
+			serveContent(w, r)
 			return
 		}
 		serveIssue(w, r)
 	})
 
-	dir := t.TempDir()
 	if _, err := runJiraDownload(t, dir, "*.png"); err == nil {
 		t.Fatal("jira attachments download error = nil, want the truncated transfer reported")
 	}

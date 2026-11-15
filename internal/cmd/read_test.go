@@ -1114,6 +1114,7 @@ func TestReadMarkdownCountsAnAttachmentWithNoUsablePathUnchecked(t *testing.T) {
 	}{
 		{name: "ID escaping the directory", a: attachment{id: "../x", title: "main.png", mediaType: "image/png"}},
 		{name: "no version", a: attachment{title: "main.png", mediaType: "image/png", version: -1}},
+		{name: "no ID", a: attachment{title: "main.png", mediaType: "image/png", noID: true}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			isolateConfig(t)
@@ -1147,9 +1148,10 @@ func TestReadMarkdownLeavesNoFileWhenATransferFailsPartWay(t *testing.T) {
 	_, serveAttachments := newReadAttachmentsAPI(t, imageBody,
 		attachment{title: "main.png", mediaType: "image/png", size: len(pngBytes)},
 	)
+	serveDownload := serveTruncated(t, filepath.Join("assets", "att1", "v1", "main.png"))
 	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/download") {
-			serveTruncated(w, r)
+			serveDownload(w, r)
 			return
 		}
 		serveAttachments(w, r)

@@ -275,7 +275,9 @@ bytes. A file already at that path is therefore the same attachment version, and
 replaced, and not downloaded again — so reading the same page twice is cheap and never overwrites
 anything. Older versions' files stay where they are; clearing the directory is up to you. Files are
 written as `confluence attachments download` writes its own (below), so an interrupted read leaves
-at most a hidden `.atlio-*.tmp` file rather than a partial file at that path.
+at most a hidden `.atlio-*.tmp` file rather than a partial file at that path — except on a
+filesystem that cannot rename without replacing, where a partial file can be left there, and is
+then reused by every later read until you delete it.
 
 An attachment that cannot be fetched leaves the image rendered as its filename rather than failing
 the read, and is counted in `Unchecked:` above.

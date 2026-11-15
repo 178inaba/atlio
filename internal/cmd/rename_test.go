@@ -25,12 +25,23 @@ func assertGone(t *testing.T, p string) {
 	}
 }
 
+// skipIfUnsupported skips a test of the no-replace rename itself where the
+// platform or the temporary directory's filesystem has none.
+func skipIfUnsupported(t *testing.T, err error) {
+	t.Helper()
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("no no-replace rename here: %v", err)
+	}
+}
+
 func TestRenameNoReplaceMovesToAFreeName(t *testing.T) {
 	dir := t.TempDir()
 	src := writeFile(t, dir, "src", "new")
 	dest := filepath.Join(dir, "dest")
 
-	if err := renameNoReplace(src, dest); err != nil {
+	err := renameNoReplace(src, dest)
+	skipIfUnsupported(t, err)
+	if err != nil {
 		t.Fatalf("renameNoReplace() error = %v", err)
 	}
 	assertFileBytes(t, dest, []byte("new"))
@@ -42,7 +53,9 @@ func TestRenameNoReplaceRefusesAnExistingTarget(t *testing.T) {
 	src := writeFile(t, dir, "src", "new")
 	dest := writeFile(t, dir, "dest", "old")
 
-	if err := renameNoReplace(src, dest); !errors.Is(err, fs.ErrExist) {
+	err := renameNoReplace(src, dest)
+	skipIfUnsupported(t, err)
+	if !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("renameNoReplace() error = %v, want fs.ErrExist", err)
 	}
 	assertFileBytes(t, dest, []byte("old"))

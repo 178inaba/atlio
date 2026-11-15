@@ -294,6 +294,14 @@ fails before downloading anything and names the file, so a run can never leave s
 and others not — delete them, or point `-o` somewhere else. `-o` defaults to the working directory
 and is created if it does not exist.
 
+Each file is downloaded to a hidden temporary file (`.atlio-*.tmp`) in the same directory and moved
+to its name only once it is complete, and the move refuses an existing file too, so a file that
+appears during the download is not replaced either. An interrupted download — a failure, Ctrl-C, a
+crash — therefore leaves no partial file under an attachment's name, at most the temporary file,
+which is safe to delete. The exception is a filesystem that cannot rename without replacing: there
+the name is created and written directly, still never replacing a file, and an interrupted download
+can leave a partial file under it.
+
 Two matching attachments that would be one file are refused the same way, before anything is
 downloaded. Names are compared ignoring case and Unicode normalisation — `a.png` and `A.png`, or the
 NFC and NFD spellings of a name, are one file on macOS's default filesystem — on every platform, so
@@ -484,8 +492,10 @@ atlio jira attachments download KAN-1 --pattern '*.png' -o ./assets
 The contract is `confluence attachments download`'s: `--pattern` is **required** and
 case-sensitive (`--pattern '*'` is the only "download everything"), matching nothing is an error
 that says how many attachments the issue has, an existing file is never replaced — the command
-fails before downloading anything and names it — and `-o` defaults to the working directory and is
-created if it does not exist.
+fails before downloading anything and names it — each file goes through a hidden `.atlio-*.tmp`
+file the same way, so an interrupted download leaves no partial file under an attachment's name
+except on a filesystem that cannot rename without replacing, and `-o` defaults to the working
+directory and is created if it does not exist.
 
 Jira lets two attachments on one issue share a filename, and `--pattern` cannot pick one of them.
 When two matched attachments have filenames that would be one file — equal ignoring case and

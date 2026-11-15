@@ -392,12 +392,17 @@ func downloadReferencedAttachments(
 // its whole run on a collision: a read must not fail over the state of a
 // directory, or reading the same page twice would stop working the second time.
 //
-// The collision is read off downloadToFile's O_EXCL create rather than checked
-// for first. That create opens the file before a byte is requested, so an
-// existing destination costs no transfer either way, and asking the filesystem
-// once is what keeps this from drifting away from the answer planDownloads
-// gets — a dangling symlink included, which O_EXCL rejects as an entry too.
+// The destination is checked before the transfer, with Lstat as planDownloads
+// checks it, so a file already there costs no request — a dangling symlink
+// included, which the move would refuse as an entry too. A file that appears
+// after the check is still kept: the move refuses to replace it, and its
+// fs.ErrExist is taken the same way.
 func fetchAttachment(ctx context.Context, p plannedDownload) bool {
+	if _, err := os.Lstat(p.dest); err == nil {
+		return true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
 	if _, err := downloadToFile(ctx, p.file, p.dest); err != nil {
 		return errors.Is(err, fs.ErrExist)
 	}

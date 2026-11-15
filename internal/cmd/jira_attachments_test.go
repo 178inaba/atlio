@@ -452,3 +452,22 @@ func TestWithIDInsertsTheIDBeforeTheExtension(t *testing.T) {
 		}
 	}
 }
+
+func TestJiraAttachmentsDownloadLeavesNothingWhenATransferFailsPartWay(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	_, serveIssue := jiraAttachmentsAPI(t, jiraAttachment{filename: "screenshot.png", mimeType: "image/png", size: 100})
+	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, jiraContentBasePath) {
+			serveTruncated(w, r)
+			return
+		}
+		serveIssue(w, r)
+	})
+
+	dir := t.TempDir()
+	if _, err := runJiraDownload(t, dir, "*.png"); err == nil {
+		t.Fatal("jira attachments download error = nil, want the truncated transfer reported")
+	}
+	assertEmptyDir(t, dir)
+}

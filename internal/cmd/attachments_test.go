@@ -1096,3 +1096,95 @@ func TestAttachmentsDownloadAcceptsASpaceOverviewURL(t *testing.T) {
 		t.Errorf("downloads = %d, want the homepage's one attachment", *downloads)
 	}
 }
+
+// confluenceDownloadAPI answers the listing with one attachment and hands
+// every download to serve, so a test controls what the transfer does.
+func confluenceDownloadAPI(t *testing.T, title string, serve http.HandlerFunc) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/attachments"):
+			_, _ = fmt.Fprintf(w, `{"results":[{"id":"att1","title":%q,"mediaType":"image/png","fileSize":11,`+
+				`"version":{"number":1},"downloadLink":"/rest/api/content/123456/child/attachment/att1/download"}],"_links":{}}`, title)
+		case strings.HasSuffix(r.URL.Path, "/download"):
+			serve(w, r)
+		default:
+			t.Errorf("unexpected request to %s", r.URL.Path)
+		}
+	}
+}
+
+// serveTruncated declares more bytes than it sends, so the client sees the
+// connection end part-way through the body.
+func serveTruncated(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Length", "100")
+	_, _ = w.Write(pngBytes)
+}
+
+// assertEmptyDir fails unless dir holds nothing: no final file and no
+// temporary file left over from the transfer.
+func assertEmptyDir(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", dir, err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s holds %v, want nothing left after the failed transfer", dir, names)
+	}
+}
+
+func TestAttachmentsDownloadLeavesNothingWhenATransferFailsPartWay(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", serveTruncated))
+
+	dir := t.TempDir()
+	if _, err := runDownload(t, dir, "*.png"); err == nil {
+		t.Fatal("attachments download error = nil, want the truncated transfer reported")
+	}
+	assertEmptyDir(t, dir)
+}
+
+// planDownloads checks every destination before the first transfer, but a file
+// can still appear at one while its bytes are in flight. The move that
+// publishes the download refuses an existing target, so that file survives.
+func TestAttachmentsDownloadKeepsAFileThatAppearsDuringTheTransfer(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "screenshot.png")
+	startAPI(t, confluenceDownloadAPI(t, "screenshot.png", func(w http.ResponseWriter, _ *http.Request) {
+		if err := os.WriteFile(dest, []byte("theirs"), 0o600); err != nil {
+			t.Errorf("WriteFile() error = %v", err)
+		}
+		_, _ = w.Write(pngBytes)
+	}))
+
+	_, err := runDownload(t, dir, "*.png")
+	if err == nil {
+		t.Fatal("attachments download error = nil, want a refusal to replace the file that appeared")
+	}
+	if !strings.Contains(err.Error(), dest) {
+		t.Errorf("error = %q, want it to name %s", err, dest)
+	}
+	got, readErr := os.ReadFile(dest)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(got) != "theirs" {
+		t.Errorf("screenshot.png = %q, want the file that appeared left as it was", got)
+	}
+	entries, readDirErr := os.ReadDir(dir)
+	if readDirErr != nil {
+		t.Fatalf("ReadDir() error = %v", readDirErr)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d entries, want only the file that appeared, no temporary file", len(entries))
+	}
+}

@@ -3,9 +3,11 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -77,6 +79,12 @@ error rather than a silent success.
 An existing file is never replaced. If any attachment would overwrite one,
 the command fails before downloading anything and names the file, so a run
 cannot leave some files replaced and others not.
+
+Each file is downloaded to a hidden .atlio-*.tmp file in the output directory
+and moved to its name once complete, so an interrupted run leaves no partial
+file under an attachment's name, and a file that appears meanwhile is not
+replaced. On a filesystem that cannot rename without replacing, the name is
+written directly instead, and an interrupted run can leave a partial file.
 
 Two matching attachments that would be one file are refused the same way:
 names are compared ignoring case and Unicode normalisation (a.png and A.png
@@ -648,29 +656,107 @@ func writeDownloads(ctx context.Context, planned []plannedDownload, outDir strin
 // downloadToFile streams one attachment to dest and reports how many bytes it
 // wrote.
 //
-// O_EXCL rather than a plain create: planDownloads has already ruled out a
-// collision, and this is what keeps a file that appeared in between from being
-// clobbered anyway. fetchAttachment does no check of its own and reads the
-// collision off this create instead, so the fs.ErrExist it wraps is part of
-// the contract. A transfer that fails part-way takes its file with it, so no
-// truncated file is left at a name that looks complete.
+// The bytes go to a temporary file beside dest and are moved into place only
+// once the transfer and the close have succeeded, so a transfer cut short — by
+// a failure, a signal or a crash — never leaves a truncated file at a name that
+// looks complete; at most a temporary file is left behind. The move refuses an
+// existing target: the callers have already ruled out a collision, and this is
+// what keeps a file that appeared in between from being replaced anyway.
+//
+// An error wraps fs.ErrExist exactly when dest itself already exists, and
+// callers branch on that: the download commands refuse the file, and
+// fetchAttachment links it as the attachment version its path names.
 func downloadToFile(ctx context.Context, file attachmentFile, dest string) (int64, error) {
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := createTemp(filepath.Dir(dest))
 	if err != nil {
-		return 0, fmt.Errorf("create %s: %w", dest, err)
+		return 0, err
 	}
+	tmp := f.Name()
 
 	n, err := file.fetch(ctx, f)
 	if err != nil {
 		_ = f.Close()
-		_ = os.Remove(dest)
+		_ = os.Remove(tmp)
 		return 0, err
 	}
 	// Closed explicitly as well, so a flush failure is reported rather than
-	// silently swallowed — and the partial file it left goes with it.
+	// silently swallowed.
 	if err := f.Close(); err != nil {
-		_ = os.Remove(dest)
+		_ = os.Remove(tmp)
 		return 0, fmt.Errorf("finalize %s: %w", dest, err)
 	}
+	if err := publishFile(tmp, dest, renameNoReplace); err != nil {
+		return 0, err
+	}
 	return n, nil
+}
+
+// createTemp creates a hidden file in dir for a download in flight.
+//
+// The name is a fixed pattern rather than one derived from the attachment's,
+// so a filename near the filesystem's length limit still gets one. Created
+// with the mode a download ends up with, which os.CreateTemp's 0600 is not.
+//
+// A collision is retried, and one that persists is reported without wrapping
+// fs.ErrExist: that error is downloadToFile's way of saying dest exists, and a
+// temporary name that happened to be taken says nothing about dest.
+func createTemp(dir string) (*os.File, error) {
+	const attempts = 3
+	for range attempts {
+		f, err := os.OpenFile(filepath.Join(dir, ".atlio-"+rand.Text()+".tmp"),
+			os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("create a temporary file in %s: %w", dir, err)
+		}
+	}
+	return nil, fmt.Errorf("create a temporary file in %s: %d names were already taken", dir, attempts)
+}
+
+// publishFile moves the finished download at tmp to dest without replacing
+// anything at dest, and removes tmp whatever happens.
+//
+// move is the operating system's no-replace rename. Where the filesystem has
+// none, the bytes are copied into dest created with O_EXCL instead: dest is
+// still never replaced, but a copy cut short leaves a truncated dest, which is
+// the guarantee such a filesystem cannot give. move is a parameter so the
+// fallback can be exercised on a filesystem that does support the rename.
+func publishFile(tmp, dest string, move func(oldpath, newpath string) error) error {
+	defer func() { _ = os.Remove(tmp) }()
+
+	err := move(tmp, dest)
+	if errors.Is(err, errors.ErrUnsupported) {
+		err = copyExclusive(tmp, dest)
+	}
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dest, err)
+	}
+	return nil
+}
+
+// copyExclusive copies src into dest, creating dest with O_EXCL. A copy that
+// fails takes the partial dest with it.
+func copyExclusive(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dest)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dest)
+		return err
+	}
+	return nil
 }

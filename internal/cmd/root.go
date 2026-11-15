@@ -247,9 +247,10 @@ func unknownCommandCandidates(cmd *cobra.Command, arg string) []string {
 
 // Execute runs the root command, reporting version for --version, and returns
 // the process exit code: 0 when it succeeded, 124 when the --timeout deadline
-// expired, and 1 for every other failure. Those numbers are the contract a caller reads, so they are spelled
-// out here rather than named. The error itself is printed rather than
-// returned, since main has nothing left to do with it.
+// expired, and 1 for every other failure. Those numbers are the contract a
+// caller reads, so they are spelled out here rather than named. The error
+// itself is printed rather than returned, since main has nothing left to do
+// with it.
 //
 // The code comes back from a function that returns normally because os.Exit
 // skips deferred functions, so main can do nothing but pass it straight on.

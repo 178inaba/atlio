@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/178inaba/atlio/internal/config"
+	"github.com/178inaba/atlio/v2/internal/config"
 	"golang.org/x/term"
 )
 

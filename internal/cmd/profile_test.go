@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/config"
+	"github.com/178inaba/atlio/v2/internal/config"
 )
 
 func TestProfileListShowsSitesAndMarksTheDefault(t *testing.T) {

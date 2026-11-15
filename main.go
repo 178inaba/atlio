@@ -6,7 +6,7 @@ package main
 import (
 	"os"
 
-	"github.com/178inaba/atlio/internal/cmd"
+	"github.com/178inaba/atlio/v2/internal/cmd"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/178inaba/atlio/internal/format"
+	"github.com/178inaba/atlio/v2/internal/format"
 	"github.com/spf13/cobra"
 )
 

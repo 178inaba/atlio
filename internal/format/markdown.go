@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/178inaba/atlio/internal/plantuml"
+	"github.com/178inaba/atlio/v2/internal/plantuml"
 )
 
 // PageRef names a page the way storage links to one: by space key and title,

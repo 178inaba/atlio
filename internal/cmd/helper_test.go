@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/atlassian"
-	"github.com/178inaba/atlio/internal/config"
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/config"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/jira"
 )
 
 const (

@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/178inaba/atlio/internal/config"
+	"github.com/178inaba/atlio/v2/internal/config"
 	"github.com/spf13/cobra"
 )
 

@@ -1,4 +1,4 @@
-module github.com/178inaba/atlio
+module github.com/178inaba/atlio/v2
 
 go 1.27
 

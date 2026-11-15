@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/format"
-	"github.com/178inaba/atlio/internal/plantuml"
-	"github.com/178inaba/atlio/internal/sidecar"
+	"github.com/178inaba/atlio/v2/internal/format"
+	"github.com/178inaba/atlio/v2/internal/plantuml"
+	"github.com/178inaba/atlio/v2/internal/sidecar"
 	"github.com/spf13/cobra"
 )
 

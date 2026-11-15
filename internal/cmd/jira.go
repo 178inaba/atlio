@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/format"
-	"github.com/178inaba/atlio/internal/issueref"
-	"github.com/178inaba/atlio/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/format"
+	"github.com/178inaba/atlio/v2/internal/issueref"
+	"github.com/178inaba/atlio/v2/internal/jira"
 	"github.com/spf13/cobra"
 )
 

@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/jira"
-	"github.com/178inaba/atlio/internal/sidecar"
+	"github.com/178inaba/atlio/v2/internal/jira"
+	"github.com/178inaba/atlio/v2/internal/sidecar"
 )
 
 // The ADF fields of the recorded issue, spelled with irregular whitespace so

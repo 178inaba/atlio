@@ -22,7 +22,7 @@ const defaultTimeout = 90 * time.Second
 const timeoutExitCode = 124
 
 // version is the release version, set at link time by GoReleaser's
-// -X github.com/178inaba/atlio/internal/cmd.version={{.Version}} and empty in
+// -X github.com/178inaba/atlio/v2/internal/cmd.version={{.Version}} and empty in
 // a binary built any other way. It is package-level state because -X can reach
 // nothing else — the code convention that rules out package-level command and
 // flag variables is about the command tree, which this is not part of.

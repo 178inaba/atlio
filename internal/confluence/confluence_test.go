@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/atlassian"
+	"github.com/178inaba/atlio/v2/internal/atlassian"
 )
 
 // newTestClient starts an httptest server with the given handler and

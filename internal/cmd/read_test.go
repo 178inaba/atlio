@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/pageref"
-	"github.com/178inaba/atlio/internal/sidecar"
+	"github.com/178inaba/atlio/v2/internal/pageref"
+	"github.com/178inaba/atlio/v2/internal/sidecar"
 )
 
 // pageResponse renders a GET /pages/{id} body with the given storage value.

@@ -39,7 +39,7 @@ On any platform, download the archive for your OS and architecture from the
 Or, with a Go toolchain:
 
 ```sh
-go install github.com/178inaba/atlio@latest
+go install github.com/178inaba/atlio/v2@latest
 ```
 
 `atlio --version` prints the version you ended up with.

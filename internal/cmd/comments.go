@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/format"
-	"github.com/178inaba/atlio/internal/pageref"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/format"
+	"github.com/178inaba/atlio/v2/internal/pageref"
 	"github.com/spf13/cobra"
 )
 

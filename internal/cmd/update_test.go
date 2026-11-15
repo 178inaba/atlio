@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/178inaba/atlio/internal/confluence"
-	"github.com/178inaba/atlio/internal/sidecar"
+	"github.com/178inaba/atlio/v2/internal/confluence"
+	"github.com/178inaba/atlio/v2/internal/sidecar"
 )
 
 const testPageURL = testWikiBase + testPageWebUI

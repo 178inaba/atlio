@@ -124,10 +124,14 @@ attachment where it should appear, and update:
   atlio confluence update -f page.xml
 
 A file whose name the page already has an attachment under is refused, and
-then none of the files are attached. --replace uploads it as a new version of
-that attachment instead, keeping its history, and creates the rest. The page
-shows the new version without a ` + "`confluence update`" + `, so retaking a screenshot
-that is already on the page is this one command.
+then none of the files are attached. Names are compared ignoring case and
+Unicode normalisation, as Confluence would otherwise take A.png as a new
+version of a.png, and the page's attachments are listed to check this before
+anything is sent. --replace uploads it as a new version of that attachment
+instead, keeping its history, and creates the rest; for a name differing in
+case that is the existing attachment, and the output reports its name. The
+page shows the new version without a ` + "`confluence update`" + `, so retaking a
+screenshot that is already on the page is this one command.
 
 All files go in one request, and --timeout is the deadline for the whole
 upload: raise it for a large file. The site's attachment size limit is not
@@ -148,7 +152,7 @@ did land, and with --replace it adds another, identical version.`,
 	}
 
 	cmd.Flags().BoolVar(&replace, "replace", false,
-		"add a new version to an attachment the page already has under the same name, instead of refusing")
+		"add a new version to an attachment the page already has under the same name, ignoring case, instead of refusing")
 	addFormatFlag(cmd, &outFormat)
 
 	return cmd
@@ -309,6 +313,24 @@ func runAttachmentsUpload(cmd *cobra.Command, args []string, g *globalFlags, rep
 		return err
 	}
 
+	// Confluence refuses only an exact match and takes a name differing in
+	// case as a new version of the existing attachment, so the refusal
+	// --replace promises is made here. An attachment added between this
+	// listing and the upload is not caught — the API has no conditional
+	// create — and an exact match among those is still refused by the 400
+	// below.
+	if !replace {
+		existing, err := client.AllPageAttachments(ctx, pageID)
+		if err != nil {
+			return fmt.Errorf("list the page's attachments: %w", err)
+		}
+		if conflicts := existingNameConflicts(opened, existing); len(conflicts) > 0 {
+			return fmt.Errorf("cannot upload (nothing was sent): %s; "+
+				"pass --replace to upload a new version of that attachment instead",
+				strings.Join(conflicts, "; "))
+		}
+	}
+
 	files := make([]confluence.UploadFile, 0, len(opened))
 	for _, f := range opened {
 		files = append(files, confluence.UploadFile{Name: filepath.Base(f.Name()), Content: f})
@@ -332,6 +354,25 @@ func runAttachmentsUpload(cmd *cobra.Command, args []string, g *globalFlags, rep
 	return writeList(cmd, outFormat, "uploaded attachments", items, "")
 }
 
+// existingNameConflicts describes each file whose base name the page already
+// has an attachment under, as attachmentNameKey compares them.
+func existingNameConflicts(files []*os.File, attachments []confluence.Attachment) []string {
+	byKey := map[string][]string{}
+	for _, a := range attachments {
+		key := attachmentNameKey(a.Title)
+		byKey[key] = append(byKey[key], a.Title)
+	}
+
+	var conflicts []string
+	for _, f := range files {
+		if titles := byKey[attachmentNameKey(filepath.Base(f.Name()))]; len(titles) > 0 {
+			conflicts = append(conflicts, fmt.Sprintf("%s matches the page's attachment %s",
+				f.Name(), strings.Join(titles, ", ")))
+		}
+	}
+	return conflicts
+}
+
 // openUploads opens every file to upload, attached under its base name, and
 // refuses the whole run — naming every offending argument — if any cannot be
 // read or two would be the same attachment.
@@ -352,11 +393,8 @@ func openUploads(paths []string) ([]*os.File, error) {
 		files    []*os.File
 		problems []string
 	)
-	byName := map[string][]string{}
 
 	for _, p := range paths {
-		byName[filepath.Base(p)] = append(byName[filepath.Base(p)], p)
-
 		f, problem := openRegular(p)
 		if problem != "" {
 			problems = append(problems, problem)
@@ -365,16 +403,10 @@ func openUploads(paths []string) ([]*os.File, error) {
 		files = append(files, f)
 	}
 
-	// Ordered by first appearance, so the message follows the command line.
-	// Each name is dropped once reported, which is what keeps one path given
-	// twice from being reported twice.
-	for _, p := range paths {
-		name := filepath.Base(p)
-		if same := byName[name]; len(same) > 1 {
-			problems = append(problems, fmt.Sprintf("%s would all be attached as %s",
-				strings.Join(same, ", "), name))
-			delete(byName, name)
-		}
+	sameAttachment := func(p string) string { return attachmentNameKey(filepath.Base(p)) }
+	for _, same := range collidingGroups(paths, sameAttachment) {
+		problems = append(problems, fmt.Sprintf("%s would all be attached as one attachment",
+			strings.Join(same, ", ")))
 	}
 
 	if len(problems) > 0 {
@@ -511,23 +543,34 @@ func localFileKey(name string) string {
 	return norm.NFD.String(cases.Fold().String(norm.NFD.String(name)))
 }
 
-// sameLocalFileGroups returns, in first-appearance order, every group of two or
-// more names that would be one file, as localFileKey defines it.
-func sameLocalFileGroups(names []string) [][]string {
+// attachmentNameKey is equal for two filenames Confluence may take as one
+// attachment. Confluence has been seen to match names ignoring ASCII case;
+// whether it also merges names differing in full case folding or Unicode
+// normalisation is unknown, so this is the wider localFileKey. Erring wide is
+// the safe side for an upload: refusing a name Confluence would keep apart
+// costs a --replace, while letting through one it would merge adds a version
+// to an existing file.
+func attachmentNameKey(name string) string {
+	return localFileKey(name)
+}
+
+// collidingGroups returns, in first-appearance order, every group of two or
+// more items whose key is equal.
+func collidingGroups(items []string, key func(string) string) [][]string {
 	byKey := map[string][]string{}
 	var order []string
-	for _, name := range names {
-		key := localFileKey(name)
-		if _, seen := byKey[key]; !seen {
-			order = append(order, key)
+	for _, item := range items {
+		k := key(item)
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
 		}
-		byKey[key] = append(byKey[key], name)
+		byKey[k] = append(byKey[k], item)
 	}
 
 	var groups [][]string
-	for _, key := range order {
-		if len(byKey[key]) > 1 {
-			groups = append(groups, byKey[key])
+	for _, k := range order {
+		if len(byKey[k]) > 1 {
+			groups = append(groups, byKey[k])
 		}
 	}
 	return groups
@@ -552,7 +595,7 @@ func planDownloads(matched []attachmentFile, outDir string) ([]plannedDownload, 
 		names = append(names, a.localName())
 	}
 	var sameFile []string
-	for _, group := range sameLocalFileGroups(names) {
+	for _, group := range collidingGroups(names, localFileKey) {
 		sameFile = append(sameFile, strings.Join(group, " and "))
 	}
 	if len(sameFile) > 0 {

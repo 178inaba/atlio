@@ -316,8 +316,11 @@ atlio confluence update -f page.xml
 ```
 
 A file whose name the page already has an attachment under is refused, and then none of the files
-in the run are attached. `--replace` uploads it as a new version of that attachment instead — its
-history is kept — and creates the rest. The page shows the new version without a `confluence
+in the run are attached. Names are compared ignoring case and Unicode normalisation — Confluence
+would otherwise take `A.png` as a new version of `a.png` — and the page's attachments are listed
+to check this before anything is sent. `--replace` uploads it as a new version of that attachment
+instead — its history is kept — and creates the rest; for a name differing in case that is the
+existing attachment, and the output reports its name. The page shows the new version without a `confluence
 update`, since the body names the attachment rather than one of its versions, so retaking a
 screenshot that is already on the page is this one command.
 

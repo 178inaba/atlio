@@ -623,6 +623,36 @@ func TestPageAttachmentsReportsMoreBeyondTheLimit(t *testing.T) {
 	}
 }
 
+func TestAllPageAttachmentsFollowsEveryPage(t *testing.T) {
+	var limits []string
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		limits = append(limits, r.URL.Query().Get("limit"))
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = fmt.Fprint(w, `{"results":[{"title":"a.png"},{"title":"b.png"}],
+				"_links":{"next":"/wiki/api/v2/pages/10/attachments?cursor=NEXT"}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"results":[{"title":"c.png"}],"_links":{}}`)
+	})
+
+	attachments, err := client.AllPageAttachments(t.Context(), "10")
+	if err != nil {
+		t.Fatalf("AllPageAttachments() error = %v", err)
+	}
+
+	var titles []string
+	for _, a := range attachments {
+		titles = append(titles, a.Title)
+	}
+	if want := []string{"a.png", "b.png", "c.png"}; !slices.Equal(titles, want) {
+		t.Errorf("titles = %q, want %q from both pages", titles, want)
+	}
+	want := strconv.Itoa(maxPageSize)
+	if !slices.Equal(limits, []string{want, want}) {
+		t.Errorf("limits = %q, want %s on every request", limits, want)
+	}
+}
+
 // formPart is one part of a multipart request as the server read it.
 type formPart struct {
 	name, filename, content string

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,8 @@ import (
 // own, so a download that decoded or re-encoded the body would corrupt it
 // visibly rather than passing by luck.
 var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x42}
+
+const attachmentsListPath = "/wiki/api/v2/pages/123456/attachments"
 
 // attachment is one entry of the listing a test serves.
 type attachment struct {
@@ -40,15 +43,12 @@ type attachment struct {
 func attachmentsAPI(t *testing.T, attachments ...attachment) (*int, http.HandlerFunc) {
 	t.Helper()
 
-	const (
-		listPath     = "/wiki/api/v2/pages/123456/attachments"
-		downloadBase = "/wiki/rest/api/content/123456/child/attachment/"
-	)
+	const downloadBase = "/wiki/rest/api/content/123456/child/attachment/"
 
 	downloads := 0
 	return &downloads, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == listPath:
+		case r.URL.Path == attachmentsListPath:
 			results := make([]map[string]any, 0, len(attachments))
 			for i, a := range attachments {
 				id := fmt.Sprintf("att%d", i+1)
@@ -488,13 +488,59 @@ type uploadRequest struct {
 	parts                     []uploadPart
 }
 
+// withAttachmentListing answers the page's attachment listing with pages, one
+// response per element and each linking to the next by cursor, counts the
+// listing requests, and passes every other request to next. A nil pages is a
+// page holding no attachments.
+func withAttachmentListing(t *testing.T, pages [][]string, next http.HandlerFunc) (*int, http.HandlerFunc) {
+	t.Helper()
+
+	if len(pages) == 0 {
+		pages = [][]string{nil}
+	}
+	listings := 0
+	return &listings, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != attachmentsListPath {
+			next(w, r)
+			return
+		}
+		listings++
+
+		i := 0
+		if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+			n, err := strconv.Atoi(cursor)
+			if err != nil || n >= len(pages) {
+				t.Errorf("listing cursor = %q, want one this listing handed out", cursor)
+				return
+			}
+			i = n
+		}
+		results := []map[string]any{}
+		links := map[string]any{}
+		for _, title := range pages[i] {
+			results = append(results, map[string]any{"title": title})
+		}
+		if i+1 < len(pages) {
+			links["next"] = fmt.Sprintf("%s?cursor=%d", strings.TrimPrefix(attachmentsListPath, "/wiki"), i+1)
+		}
+		payload, err := json.Marshal(map[string]any{"results": results, "_links": links})
+		if err != nil {
+			t.Errorf("Marshal() error = %v", err)
+			return
+		}
+		_, _ = w.Write(payload)
+	}
+}
+
 // uploadAPI answers every upload with a result per file part it received,
-// at version 1 under POST and 2 under PUT, and records the requests.
+// at version 1 under POST and 2 under PUT, and records the requests. The
+// page's attachment listing, which an upload without --replace reads first,
+// holds nothing; withAttachmentListing around it serves a different one.
 func uploadAPI(t *testing.T) (*[]uploadRequest, http.HandlerFunc) {
 	t.Helper()
 
 	var requests []uploadRequest
-	return &requests, func(w http.ResponseWriter, r *http.Request) {
+	_, handler := withAttachmentListing(t, nil, func(w http.ResponseWriter, r *http.Request) {
 		user, _, _ := r.BasicAuth()
 		req := uploadRequest{
 			method: r.Method, path: r.URL.Path, user: user,
@@ -540,7 +586,8 @@ func uploadAPI(t *testing.T) (*[]uploadRequest, http.HandlerFunc) {
 			return
 		}
 		_, _ = w.Write(payload)
-	}
+	})
+	return &requests, handler
 }
 
 func TestAttachmentsUploadPostsTheFileUnderItsBaseName(t *testing.T) {
@@ -602,6 +649,123 @@ func TestAttachmentsUploadWithReplaceIsAPut(t *testing.T) {
 	}
 	if got.token != "nocheck" || !slices.Equal(got.parts, want) {
 		t.Errorf("token %q parts %q, want nocheck and %q — nothing but the method differs", got.token, got.parts, want)
+	}
+}
+
+// TestAttachmentsUploadRefusesANameThePageHasIgnoringCase covers the check
+// that keeps an upload without --replace from adding a version to an existing
+// attachment: Confluence's own 400 covers an exact match only.
+func TestAttachmentsUploadRefusesANameThePageHasIgnoringCase(t *testing.T) {
+	tests := []struct {
+		name     string
+		listing  [][]string
+		upload   string
+		existing string
+	}{
+		{name: "differing in case", listing: [][]string{{"a.png"}}, upload: "A.png", existing: "a.png"},
+		{
+			name:    "on the listing's second page",
+			listing: [][]string{{"b.png", "c.png"}, {"a.png"}},
+			upload:  "A.png", existing: "a.png",
+		},
+		{name: "equal under full case folding", listing: [][]string{{"Straße.png"}}, upload: "STRASSE.png", existing: "Straße.png"},
+		{name: "differing in normalisation", listing: [][]string{{"é.png"}}, upload: "é.png", existing: "é.png"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateConfig(t)
+			seedProfile(t, "example", testSite)
+			requests, upload := uploadAPI(t)
+			listings, handler := withAttachmentListing(t, tt.listing, upload)
+			startAPI(t, handler)
+
+			file := writeTempFile(t, tt.upload, string(pngBytes))
+
+			_, err := runCLI(t, "confluence", "attachments", "upload", testPageURL, file)
+			if err == nil {
+				t.Fatal("attachments upload error = nil, want the name refused")
+			}
+			for _, want := range []string{file, tt.existing, "--replace", "nothing was sent"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want %q in it", err, want)
+				}
+			}
+			if len(*requests) != 0 {
+				t.Errorf("uploads = %d, want none", len(*requests))
+			}
+			if *listings != len(tt.listing) {
+				t.Errorf("listing requests = %d, want every page (%d) read", *listings, len(tt.listing))
+			}
+		})
+	}
+}
+
+func TestAttachmentsUploadRefusesTheWholeRunNamingEveryMatch(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	requests, upload := uploadAPI(t)
+	_, handler := withAttachmentListing(t, [][]string{{"a.png", "c.png"}}, upload)
+	startAPI(t, handler)
+
+	free := writeTempFile(t, "b.png", string(pngBytes))
+	first := writeTempFile(t, "A.png", string(pngBytes))
+	second := writeTempFile(t, "C.png", string(pngBytes))
+
+	_, err := runCLI(t, "confluence", "attachments", "upload", testPageURL, free, first, second)
+	if err == nil {
+		t.Fatal("attachments upload error = nil, want the run refused")
+	}
+	for _, want := range []string{
+		first + " matches the page's attachment a.png",
+		second + " matches the page's attachment c.png",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q in it", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), free) {
+		t.Errorf("error = %q, want %s, which matches nothing, left unnamed", err, free)
+	}
+	if len(*requests) != 0 {
+		t.Errorf("uploads = %d, want none — not even %s", len(*requests), free)
+	}
+}
+
+func TestAttachmentsUploadSendsANameThePageDoesNotHave(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	requests, upload := uploadAPI(t)
+	listings, handler := withAttachmentListing(t, [][]string{{"b.png"}}, upload)
+	startAPI(t, handler)
+
+	file := writeTempFile(t, "a.png", string(pngBytes))
+
+	if _, err := runCLI(t, "confluence", "attachments", "upload", testPageURL, file); err != nil {
+		t.Fatalf("attachments upload error = %v", err)
+	}
+	if *listings != 1 || len(*requests) != 1 || (*requests)[0].method != http.MethodPost {
+		t.Errorf("listings %d, uploads %+v, want the listing read and then one POST", *listings, *requests)
+	}
+}
+
+func TestAttachmentsUploadWithReplaceDoesNotListTheAttachments(t *testing.T) {
+	isolateConfig(t)
+	seedProfile(t, "example", testSite)
+	requests, upload := uploadAPI(t)
+	listings, handler := withAttachmentListing(t, [][]string{{"a.png"}}, upload)
+	startAPI(t, handler)
+
+	file := writeTempFile(t, "A.png", string(pngBytes))
+
+	if _, err := runCLI(t, "confluence", "attachments", "upload", testPageURL, file, "--replace"); err != nil {
+		t.Fatalf("attachments upload error = %v", err)
+	}
+	if *listings != 0 {
+		t.Errorf("listing requests = %d, want none under --replace", *listings)
+	}
+	if len(*requests) != 1 || (*requests)[0].method != http.MethodPut {
+		t.Errorf("uploads = %+v, want one PUT", *requests)
 	}
 }
 
@@ -713,12 +877,15 @@ func TestAttachmentsUploadAcceptsASpaceOverviewURL(t *testing.T) {
 func TestAttachmentsUploadPointsAtReplaceWhenThePostIsRefused(t *testing.T) {
 	isolateConfig(t)
 	seedProfile(t, "example", testSite)
-	startAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	// The listing misses a.png, as it does for an attachment added between
+	// the check and the upload.
+	_, handler := withAttachmentListing(t, nil, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = fmt.Fprint(w, `{"statusCode":400,"message":"com.atlassian.confluence.api.service.exceptions.BadRequestException: `+
 			`Cannot add a new attachment with same file name as an existing attachment: a.png"}`)
 	})
+	startAPI(t, handler)
 
 	file := writeTempFile(t, "a.png", string(pngBytes))
 
@@ -744,10 +911,11 @@ func TestAttachmentsUploadChecksEveryFileBeforeSending(t *testing.T) {
 	valid := writeTempFile(t, "a.png", string(pngBytes))
 	missing := filepath.Join(t.TempDir(), "missing.png")
 	sameName := writeTempFile(t, "other/a.png", "x")
+	otherCase := writeTempFile(t, "upper/A.png", "x")
 
 	isMissing := missing
 	isDir := dir + " is a directory"
-	collides := valid + ", " + sameName + " would all be attached as a.png"
+	collides := valid + ", " + sameName + " would all be attached as one attachment"
 
 	tests := []struct {
 		name  string
@@ -760,9 +928,14 @@ func TestAttachmentsUploadChecksEveryFileBeforeSending(t *testing.T) {
 		{name: "a directory", files: []string{dir}, want: []string{isDir}},
 		{name: "two files with the same base name", files: []string{valid, sameName}, want: []string{collides}},
 		{
+			name:  "two base names differing in case",
+			files: []string{valid, otherCase},
+			want:  []string{valid + ", " + otherCase + " would all be attached as one attachment"},
+		},
+		{
 			name:  "one file given twice",
 			files: []string{valid, valid},
-			want:  []string{valid + ", " + valid + " would all be attached as a.png"},
+			want:  []string{valid + ", " + valid + " would all be attached as one attachment"},
 		},
 		{name: "a valid file beside a missing one", files: []string{valid, missing}, want: []string{isMissing}},
 		{
@@ -839,10 +1012,11 @@ func TestAttachmentsUploadReportsADeadlineThatExpiresMidUpload(t *testing.T) {
 	// never sees the client go away, so r.Context() would not end it.
 	release := make(chan struct{})
 	var served atomic.Bool
-	startAPI(t, func(_ http.ResponseWriter, _ *http.Request) {
+	_, handler := withAttachmentListing(t, nil, func(_ http.ResponseWriter, _ *http.Request) {
 		served.Store(true)
 		<-release
 	})
+	startAPI(t, handler)
 	defer close(release)
 
 	// Large enough that the body cannot all sit in the socket buffers while
@@ -875,7 +1049,8 @@ func TestAttachmentsUploadSaysWhenTheUploadMayHaveLanded(t *testing.T) {
 
 			fail, release := failCreating(fc)
 			defer release()
-			startAPI(t, fail)
+			_, handler := withAttachmentListing(t, nil, fail)
+			startAPI(t, handler)
 
 			_, err := runCLI(t, "confluence", "attachments", "upload", testPageURL,
 				creatingBody(t, fc), fc.timeoutFlag())

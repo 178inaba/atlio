@@ -1,5 +1,10 @@
 # Changelog
 
+## [v2.0.1](https://github.com/178inaba/atlio/compare/v2.0.0...v2.0.1) - 2026-11-26
+
+### Dependency updates
+- Bump golang.org/x/term from 0.47.0 to 0.48.0 by @dependabot[bot] in https://github.com/178inaba/atlio/pull/135
+
 ## [v2.0.0](https://github.com/178inaba/atlio/compare/v1.1.0...v2.0.0) - 2026-11-15
 
 ### Changes
